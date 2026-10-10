@@ -1,0 +1,88 @@
+name: Build Stormbreaker kernel (miatoll)
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: >-
+          Runner label. Default ubuntu-latest (standard GitHub-hosted, 4 vCPU / 16 GB).
+          For the fastest build pick a larger runner your account has, e.g. ubuntu-24.04-8core,
+          ubuntu-24.04-16core (GitHub larger runners must be enabled for the org/repo).
+        required: false
+        default: ubuntu-latest
+        type: string
+      neutron_tag:
+        description: Neutron Clang build tag (clang-build-catalogue). 30062026 = Clang 23.0.0git
+        required: false
+        default: "30062026"
+        type: string
+  push:
+    branches: [a, "arena/**"]
+
+concurrency:
+  group: kernel-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build miatoll kernel (Neutron Clang, no GCC)
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    timeout-minutes: 240
+    env:
+      NEUTRON_TAG: ${{ inputs.neutron_tag || '30062026' }}
+      USE_CCACHE: "1"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 6G
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+                      /usr/local/share/boost /usr/local/share/powershell "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
+      - name: Install build tools (LLVM only, no GCC)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            make bc bison flex libssl-dev python3 zip zstd curl xz-utils ccache cpio kmod ca-certificates
+          nproc; free -h
+
+      - name: Cache Neutron Clang
+        uses: actions/cache@v4
+        with:
+          path: .toolchain/neutron-clang
+          key: neutron-clang-${{ env.NEUTRON_TAG }}
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ github.ref_name }}-
+
+      - name: Build kernel
+        run: ci/build.sh
+
+      - name: Show ccache stats
+        if: always()
+        run: ccache -s || true
+
+      - name: Upload flashable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: Stormbreaker-miatoll-${{ github.run_number }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+            dist/config-*
+          if-no-files-found: error
+          retention-days: 14

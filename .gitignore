@@ -139,3 +139,6 @@ AnyKernel/
 
 # CI build output (flashable zips live in GitHub Actions artifacts)
 /dist/
+
+# GitHub Actions workflows must be tracked
+!/.github/
