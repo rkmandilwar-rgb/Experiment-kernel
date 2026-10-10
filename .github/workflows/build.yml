@@ -1,6 +1,6 @@
 # Stormbreaker — build & release (miatoll)
 # Non-GKI kernel v4.14 for Curtana / Gram / Joyeuse / Excalibur
-# Built with Ubuntu LLVM, no GCC for aarch64.
+# Built with Neutron Clang v22 (LLVM), zero GCC for aarch64.
 name: Build & Release Stormbreaker Kernel
 
 on:
@@ -10,7 +10,7 @@ on:
       - arena/7d79595b-experiment-kernel
 
 permissions:
-  contents: write          # needed for gh release create
+  contents: write
 
 concurrency:
   group: miatoll-kernel-${{ github.ref }}
@@ -19,6 +19,7 @@ concurrency:
 env:
   ARCH: arm64
   DEFCONFIG: vendor/xiaomi/miatoll_defconfig
+  NEUTRON_TAG: "06092026"    # Neutron Clang v22 — Sep 6 2026
 
 jobs:
   # ─────────────────────────────────────────────────────────────────
@@ -26,7 +27,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────
   build:
     name: Compile and verify
-    runs-on: ubuntu-24.04          # 4 cores, 16 GB RAM
+    runs-on: ubuntu-24.04
     timeout-minutes: 240
 
     steps:
@@ -34,17 +35,48 @@ jobs:
       - name: Checkout kernel source
         uses: actions/checkout@v4
 
-      # ── 1. Build dependencies (Ubuntu LLVM — zero downloads) ───
+      # ── 1. Build dependencies (system clang NOT used for kernel) ─
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            bc bison ccache clang flex git kmod libelf-dev libc6-dev \
-            lld llvm make libssl-dev python3 rsync zip \
+            bc bison ccache flex git kmod libelf-dev libc6-dev \
+            make libssl-dev python3 rsync zstd zip \
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi
 
-      # ── 2. Ccache ──────────────────────────────────────────────
+      # ── 2. Neutron Clang v22 ────────────────────────────────────
+      - name: Download Neutron Clang ${{ env.NEUTRON_TAG }}
+        run: |
+          wget -q --show-progress -O neutron-clang.tar.zst \
+            "https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/${{ env.NEUTRON_TAG }}/neutron-clang-${{ env.NEUTRON_TAG }}.tar.zst"
+          mkdir -p "${{ github.workspace }}/neutron-clang"
+          zstd -d --stdout neutron-clang.tar.zst \
+            | tar xf - -C "${{ github.workspace }}/neutron-clang" --strip-components=1
+          rm -f neutron-clang.tar.zst
+          # Put Neutron Clang FIRST on PATH (overrides any system clang)
+          echo "${{ github.workspace }}/neutron-clang/bin" >> "$GITHUB_PATH"
+
+      - name: Verify toolchain
+        run: |
+          echo "::group::Neutron Clang v22"
+          clang --version | head -3
+          echo "::endgroup::"
+          echo "::group::LLVM tools"
+          ld.lld --version
+          llvm-ar --version | head -1
+          llvm-nm --version | head -1
+          llvm-objcopy --version | head -1
+          echo "::endgroup::"
+          echo "::group::aarch64 GCC (ELF tools only)"
+          aarch64-linux-gnu-gcc --version | head -1
+          aarch64-linux-gnu-elfedit --version | head -1
+          echo "::endgroup::"
+          echo "::group::arm GCC (vDSO only)"
+          arm-linux-gnueabi-gcc --version | head -1
+          echo "::endgroup::"
+
+      # ── 3. Ccache ──────────────────────────────────────────────
       - name: Restore compiler cache
         uses: actions/cache@v4
         with:
@@ -52,20 +84,6 @@ jobs:
           key: miatoll-ccache-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             miatoll-ccache-${{ runner.os }}-
-
-      # ── 3. Verify LLVM toolchain ───────────────────────────────
-      - name: Verify LLVM toolchain
-        run: |
-          set -euo pipefail
-          clang --version
-          ld.lld --version
-          llvm-ar --version
-          aarch64-linux-gnu-gcc --version | head -1
-          arm-linux-gnueabi-gcc   --version | head -1
-          for tool in clang ld.lld llvm-ar llvm-nm llvm-objcopy \
-                      llvm-objdump llvm-readelf llvm-strip; do
-            command -v "$tool"
-          done
 
       # ── 4. Generate configuration ──────────────────────────────
       - name: Generate and verify configuration
@@ -76,23 +94,23 @@ jobs:
           test -f "$DEFCONFIG_PATH"
 
           # ── Merge fragments into a temporary defconfig ──
-          MERGED_DEFCONFIG="arch/arm64/configs/vendor/xiaomi/stormbreaker_defconfig"
-          cp "$DEFCONFIG_PATH" "$MERGED_DEFCONFIG"
-          scripts/merge-defconfig.sh "$MERGED_DEFCONFIG"
+          MERGED="arch/arm64/configs/vendor/xiaomi/stormbreaker_defconfig"
+          cp "$DEFCONFIG_PATH" "$MERGED"
+          scripts/merge-defconfig.sh "$MERGED"
 
           # ── Generate .config from merged defconfig ──
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- vendor/xiaomi/stormbreaker_defconfig
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            vendor/xiaomi/stormbreaker_defconfig
 
           # ── Disable modversions (clang-built CRC drift) ──
-          scripts/config --file out/.config \
-            -d CONFIG_MODVERSIONS
+          scripts/config --file out/.config -d CONFIG_MODVERSIONS
 
           # ── Fill in dependencies silently ──
           make O=out ARCH=arm64 olddefconfig
 
           # ── Clean up temp defconfig ──
-          rm -f "$MERGED_DEFCONFIG"
+          rm -f "$MERGED"
 
           # ── Verify required features ──
           require() {
@@ -180,7 +198,7 @@ jobs:
           echo "  =m  : $(grep -c '=m' out/.config)"
           echo "::endgroup::"
 
-      # ── 5. Build ───────────────────────────────────────────────
+      # ── 5. Build with Neutron Clang v22 ────────────────────────
       - name: Build kernel, DTB and DTBO
         run: |
           set -euo pipefail
@@ -195,6 +213,7 @@ jobs:
             LLVM=1 LLVM_IAS=1 \
             CC='ccache clang' \
             CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             > build.log 2>&1
           status=$?
           set -e
@@ -204,10 +223,12 @@ jobs:
               | cut -c1-200 > build-errors.txt || true
             total=$(wc -l < build-errors.txt)
             echo "::error::Kernel build failed: ${total} distinct error lines"
-            cat build-errors.txt
-            tail -n 300 build.log
+            head -25 build-errors.txt
+            echo "---"
+            tail -200 build.log
             exit "$status"
           fi
+
           tail -n 60 build.log
 
       # ── 6. Verify build products ───────────────────────────────
@@ -227,13 +248,16 @@ jobs:
           echo "::endgroup::"
 
           make -s O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- kernelrelease | tee kernel.release
+            CROSS_COMPILE=aarch64-linux-gnu- kernelrelease \
+            | tee kernel.release
 
-          echo "commit=${GITHUB_SHA}"             >  build-info.txt
-          echo "kernel.release=$(cat kernel.release)" >> build-info.txt
-          echo "toolchain.source=ubuntu-24.04-llvm"  >> build-info.txt
-          clang --version | head -1 | sed 's/^/clang.version=/'  >> build-info.txt
-          ld.lld --version | head -1 | sed 's/^/lld.version=/'   >> build-info.txt
+          {
+            echo "commit=${GITHUB_SHA}"
+            echo "kernel.release=$(cat kernel.release)"
+            echo "toolchain=neutron-clang-${NEUTRON_TAG}"
+            clang --version | head -1 | sed 's/^/clang.version=/'
+            ld.lld --version | head -1 | sed 's/^/lld.version=/'
+          } > build-info.txt
 
       # ── 7. Upload failure diagnostics ───────────────────────────
       - name: Upload failure diagnostics
@@ -247,7 +271,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      # ── 8. Package AnyKernel3 zip ──────────────────────────────
+      # ── 8. Package AnyKernel3 flashable zip ────────────────────
       - name: Package AnyKernel3 flashable zip
         run: |
           set -euo pipefail
@@ -264,7 +288,7 @@ jobs:
           retention-days: 90
 
   # ─────────────────────────────────────────────────────────────────
-  # JOB 2:  Publish release  (only after a successful build)
+  # JOB 2:  Publish release
   # ─────────────────────────────────────────────────────────────────
   release:
     name: Publish release
@@ -291,42 +315,42 @@ jobs:
           set -euo pipefail
           TAG="stormbreaker-${{ github.run_number }}"
 
-          # Read kernel release from build info
-          KREL=$(grep kernel.release release-assets/build-info.txt | cut -d= -f2 || echo "unknown")
+          KREL=$(grep kernel.release release-assets/build-info.txt \
+                 | cut -d= -f2 || echo "unknown")
 
-          cat > release-notes.md << 'NOTES_EOF'
+          cat > release-notes.md << EOF
           # Stormbreaker Kernel — miatoll
 
-          **Kernel:** `__KREL__`
+          **Kernel:** \`${KREL}\`
           **Device:** Xiaomi Miatoll (Curtana / Gram / Joyeuse / Excalibur)
-          **SoC:** SM6250 (Atoll)
-          **Toolchain:** Ubuntu 24.04 LLVM (pure LLVM, zero GCC for aarch64)
+          **SoC:** SM6250 (Atoll) — non-GKI kernel v4.14
+          **Toolchain:** Neutron Clang \`${NEUTRON_TAG}\` (LLVM 22, zero GCC for aarch64)
 
           ---
 
           ## ✨ Features
 
           ### eBPF (extended Berkeley Packet Filter)
-          - BPF syscall + arm64 JIT (always-on hardened image)
+          - \`BPF_SYSCALL=y\` — BPF syscall + arm64 JIT (\`BPF_JIT_ALWAYS_ON\`)
           - cgroup-bpf, kprobe / uprobe / tracepoint attach types
-          - cls_bpf, act_bpf, lwtunnel BPF, NETFILTER_XT_MATCH_BPF
+          - cls_bpf, act_bpf, lwtunnel BPF, \`NETFILTER_XT_MATCH_BPF\`
           - BPF stream parser (sockmap / sk_msg), BPF events
 
           ### NTFS support
-          - **Legacy NTFS** (`NTFS_FS=y`, `NTFS_RW=y`) — read + partial write
-          - **Paragon NTFS3** read-write driver (`fs/ntfs3/`, backported to 4.14)
+          - **Legacy NTFS** (\`NTFS_FS=y\`, \`NTFS_RW=y\`) — read + partial write
+          - **Paragon NTFS3** read-write driver (\`fs/ntfs3/\`, backported to 4.14)
             - Normal / sparse / compressed files, journal replaying
             - POSIX ACLs, LZX / XPRESS decompression
-            - Coexists with legacy driver (`mount -t ntfs3`)
+            - Coexists with legacy driver: \`mount -t ntfs3\`
 
           ### EROFS (Enhanced Read-Only File System)
-          - `EROFS_FS=y` with LZ4 compression
+          - \`EROFS_FS=y\` with LZ4 compression
           - Extended attributes, POSIX ACL, security labels
           - Mounts system / vendor EROFS partitions natively
 
           ### BBRv1 congestion control
-          - BBR v1 as default TCP congestion control (`DEFAULT_TCP_CONG="bbr"`)
-          - fq pacing qdisc (`NET_SCH_FQ=y`) — mandatory for BBR
+          - BBR v1 as default TCP congestion control (\`DEFAULT_TCP_CONG="bbr"\`)
+          - fq pacing qdisc (\`NET_SCH_FQ=y\`) — mandatory for BBR
           - CUBIC and RENO still compiled in; BBR is the new default
 
           ### Droidspaces (Linux containers on Android)
@@ -341,7 +365,7 @@ jobs:
 
           ### Kali NetHunter support
           - **USB Gadget (configfs):** HID (BadUSB), CDC ACM, ECM, NCM, RNDIS, Mass Storage, EEM
-          - **USB traffic monitoring:** `USB_MON=y`
+          - **USB traffic monitoring:** \`USB_MON=y\`
           - **CAN bus:** vcan, slcan, all USB CAN adaptors (EMS, ESD, GS, Kvaser, PEAK, 8DEV, MCBA)
           - **Bluetooth Arsenal:** RFCOMM TTY, BNEP, HIDP, hcibtusb
           - **NFS server + client:** v2 / v3 / v4
@@ -356,19 +380,17 @@ jobs:
           ---
 
           ## 📦 Flashing
-          ```
+
+          \`\`\`
           # TWRP / custom recovery:
           # 1. Flash the .zip
           # 2. Reboot
-          ```
+          # 3. Verify Droidspaces: su -c droidspaces check
+          \`\`\`
 
-          **Contents:** `Image.gz` + `dtbo.img` (all four miatoll variants)
-          NOTES_EOF
+          **Contents:** \`Image.gz\` + \`dtbo.img\` (all four miatoll variants)
+          EOF
 
-          # Inject actual kernel release
-          sed -i "s|__KREL__|${KREL}|g" release-notes.md
-
-          # Delete stale tag if present (re-run)
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release delete "$TAG" --yes --cleanup-tag
           fi
