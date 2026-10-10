@@ -77,8 +77,7 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu- "$DEFCONFIG"
 
           # ── Merge feature fragments ──
-          scripts/merge-defconfig.sh \
-            "arch/arm64/configs/$DEFCONFIG"
+          scripts/merge-defconfig.sh out/.config
 
           # ── Disable modversions (clang-built CRC drift) ──
           scripts/config --file out/.config \
