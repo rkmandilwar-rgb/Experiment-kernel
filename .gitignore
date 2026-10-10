@@ -136,3 +136,6 @@ gcc32/
 gcc64/
 out/
 AnyKernel/
+
+# CI build output (flashable zips live in GitHub Actions artifacts)
+/dist/
