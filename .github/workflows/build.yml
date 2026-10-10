@@ -222,18 +222,28 @@ jobs:
             grep -E ' error:' build.log | sed 's/\r$//' | awk '!seen[$0]++' \
               | cut -c1-200 > build-errors.txt || true
             total=$(wc -l < build-errors.txt)
-            # Print the first errors with full context so they show in
-            # the step output (which we CAN read from the Actions page).
-            echo "::error::Kernel build failed (${total} distinct errors)"
-            echo ""
-            echo "=== FIRST 10 ERROR LINES ==="
-            head -10 build-errors.txt
-            echo ""
-            echo "=== CONTEXT AROUND FIRST ERROR ==="
-            grep -n -B5 -A10 -m 5 ' error:' build.log || true
-            echo ""
-            echo "=== LAST 80 LINES OF BUILD LOG ==="
-            tail -80 build.log
+            # Print errors to the job summary (ALWAYS readable on Actions page)
+            {
+              echo "## Build failure"
+              echo ""
+              echo "**${total} distinct error lines**"
+              echo ""
+              echo "### First errors"
+              echo '```'
+              head -30 build-errors.txt
+              echo '```'
+              echo ""
+              echo "### First errors with context"
+              echo '```'
+              grep -n -B3 -A12 -m 30 'error:' build.log || true
+              echo '```'
+              echo ""
+              echo "### Last 150 lines"
+              echo '```'
+              tail -150 build.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Kernel build failed (${total} distinct errors). See summary for details."
             exit "$status"
           fi
 
