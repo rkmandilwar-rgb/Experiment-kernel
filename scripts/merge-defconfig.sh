@@ -1,33 +1,24 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 #
-# merge-defconfig.sh - merge a vendor defconfig with kernel/configs/miatoll
-#                      config fragments to produce the final .config used
-#                      by the build.
+# merge-defconfig.sh — merge vendor defconfig with kernel/configs/miatoll
+# config fragments.
 #
 # Usage:
-#   ARCH=arm64 scripts/merge-defconfig.sh \
-#       arch/arm64/configs/vendor/xiaomi/miatoll_defconfig
+#   scripts/merge-defconfig.sh                           # uses .config
+#   scripts/merge-defconfig.sh out/.config               # uses out/.config
 #
-# The result is written to .config (or $KCONFIG_CONFIG if set).
-# For each symbol that appears in BOTH the defconfig AND one of the
-# fragments, the fragment wins.  Symbols that only appear in one file
-# or the other are kept as-is.
-#
-# The script deliberately does NOT use scripts/kconfig/merge_config.sh
-# from mainline because that script does not understand how to "replace"
-# a value already set in the base; it only appends to the end of an
-# already-loaded config, and for tristate symbols its '=y' vs '#is not
-# set' resolution can silently flip things the defconfig already locked
-# down.
+# Assumes a base .config already exists (from `make defconfig` or similar).
+# For every CONFIG_FOO=<value> line in each fragment, the fragment value
+# overwrites whatever was in the base .config.
 
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$SRC"
 
-base="${1:?Usage: $0 <defconfig>}"
-[ -f "$base" ] || { echo "FATAL: $base not found" >&2; exit 1; }
+out="${1:-.config}"
+[ -f "$out" ] || { echo "FATAL: $out does not exist. Run defconfig first." >&2; exit 1; }
 
 frags=(
     kernel/configs/miatoll/ebpf.config
@@ -38,32 +29,23 @@ frags=(
     kernel/configs/miatoll/nethunter.config
 )
 
-out="${KCONFIG_CONFIG:-.config}"
-
 echo "merge-defconfig.sh"
-echo "  base  : $base"
-echo "  frags : ${frags[*]}"
-echo "  out   : $out"
+echo "  config: $out"
+echo "  frags : ${#frags[@]} fragment(s)"
 
-# 1)  Copy the vendor defconfig verbatim as the starting .config.
-cp "$base" "$out"
-
-# 2)  For every CONFIG_FOO=<value> line in each fragment, overwrite
-#     the same symbol in $out.  If the symbol was not in $base at all,
-#     it is appended.  If a fragment says "# CONFIG_FOO is not set",
-#     it replaces a CONFIG_FOO=y or CONFIG_FOO=m in $out.
+count=0
 for f in "${frags[@]}"; do
     [ -f "$f" ] || { echo "SKIP $f (not found)"; continue; }
     while IFS= read -r line; do
         [ -z "$line" ] && continue
         case "$line" in
             '#'*' is not set')
-                # "not-set" directive: # CONFIG_FOO is not set
                 sym=$(echo "$line" | sed 's/^[[:space:]]*# CONFIG_\(.*\) is not set.*/\1/')
                 sed -i "s|^CONFIG_${sym}=.*|# CONFIG_${sym} is not set|" "$out"
                 if ! grep -q "CONFIG_${sym}" "$out"; then
                     echo "$line" >> "$out"
                 fi
+                count=$((count + 1))
                 ;;
             'CONFIG_'*'='*)
                 sym=$(echo "$line" | cut -d= -f1)
@@ -75,10 +57,12 @@ for f in "${frags[@]}"; do
                 else
                     echo "$line" >> "$out"
                 fi
+                count=$((count + 1))
                 ;;
-            '#'*|[[:space:]]*)  ;;
+            '#'*|[[:space:]]*) ;;
         esac
     done <"$f"
 done
 
+echo "  applied $count option overrides"
 echo "merge-defconfig.sh: done ($out)"
