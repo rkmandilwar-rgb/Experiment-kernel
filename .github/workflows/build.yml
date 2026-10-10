@@ -215,9 +215,13 @@ jobs:
           set -e
 
           if [ "$status" -ne 0 ]; then
-            grep -E ' error:' build.log | sed 's/\r$//' | awk '!seen[$0]++' \
+            grep -E ' error:|fatal error:' build.log | sed 's/\r$//' | awk '!seen[$0]++' \
               | cut -c1-200 > build-errors.txt || true
             total=$(wc -l < build-errors.txt)
+            # Emit each error as a GitHub annotation (visible in API)
+            while IFS= read -r line; do
+              echo "::error::$line"
+            done < build-errors.txt
             echo "## Build failure" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "**${total} distinct error lines**" >> "$GITHUB_STEP_SUMMARY"
