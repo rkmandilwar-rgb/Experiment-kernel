@@ -72,12 +72,17 @@ jobs:
         run: |
           set -euo pipefail
 
-          # ── Generate base config from vendor defconfig ──
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- "$DEFCONFIG"
+          DEFCONFIG_PATH="arch/arm64/configs/$DEFCONFIG"
+          test -f "$DEFCONFIG_PATH"
 
-          # ── Merge feature fragments ──
-          scripts/merge-defconfig.sh out/.config
+          # ── Merge fragments into a temporary defconfig ──
+          MERGED_DEFCONFIG="arch/arm64/configs/vendor/xiaomi/stormbreaker_defconfig"
+          cp "$DEFCONFIG_PATH" "$MERGED_DEFCONFIG"
+          scripts/merge-defconfig.sh "$MERGED_DEFCONFIG"
+
+          # ── Generate .config from merged defconfig ──
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- vendor/xiaomi/stormbreaker_defconfig
 
           # ── Disable modversions (clang-built CRC drift) ──
           scripts/config --file out/.config \
@@ -85,6 +90,9 @@ jobs:
 
           # ── Fill in dependencies silently ──
           make O=out ARCH=arm64 olddefconfig
+
+          # ── Clean up temp defconfig ──
+          rm -f "$MERGED_DEFCONFIG"
 
           # ── Verify required features ──
           require() {
@@ -187,8 +195,6 @@ jobs:
             LLVM=1 LLVM_IAS=1 \
             CC='ccache clang' \
             CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            CONFIG_NO_ERROR_ON_MISMATCH=y \
             > build.log 2>&1
           status=$?
           set -e
