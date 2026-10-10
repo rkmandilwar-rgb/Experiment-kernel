@@ -222,10 +222,18 @@ jobs:
             grep -E ' error:' build.log | sed 's/\r$//' | awk '!seen[$0]++' \
               | cut -c1-200 > build-errors.txt || true
             total=$(wc -l < build-errors.txt)
-            echo "::error::Kernel build failed: ${total} distinct error lines"
-            head -25 build-errors.txt
-            echo "---"
-            tail -200 build.log
+            # Print the first errors with full context so they show in
+            # the step output (which we CAN read from the Actions page).
+            echo "::error::Kernel build failed (${total} distinct errors)"
+            echo ""
+            echo "=== FIRST 10 ERROR LINES ==="
+            head -10 build-errors.txt
+            echo ""
+            echo "=== CONTEXT AROUND FIRST ERROR ==="
+            grep -n -B5 -A10 -m 5 ' error:' build.log || true
+            echo ""
+            echo "=== LAST 80 LINES OF BUILD LOG ==="
+            tail -80 build.log
             exit "$status"
           fi
 
