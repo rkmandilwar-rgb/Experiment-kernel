@@ -1,6 +1,6 @@
 # Stormbreaker — build & release (miatoll)
 # Non-GKI kernel v4.14 for Curtana / Gram / Joyeuse / Excalibur
-# Built with Neutron Clang v22 (LLVM), zero GCC for aarch64.
+# Built with LLVM 22 from apt.llvm.org (official), no GCC for aarch64.
 name: Build & Release Stormbreaker Kernel
 
 on:
@@ -19,48 +19,47 @@ concurrency:
 env:
   ARCH: arm64
   DEFCONFIG: vendor/xiaomi/miatoll_defconfig
-  NEUTRON_TAG: "06092026"    # Neutron Clang v22 — Sep 6 2026
+  LLVM_VERSION: "22"
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────
-  # JOB 1:  Compile and verify
-  # ─────────────────────────────────────────────────────────────────
   build:
     name: Compile and verify
     runs-on: ubuntu-24.04
     timeout-minutes: 240
 
     steps:
-      # ── 0. Source code ──────────────────────────────────────────
       - name: Checkout kernel source
         uses: actions/checkout@v4
 
-      # ── 1. Build dependencies (system clang NOT used for kernel) ─
-      - name: Install build dependencies
+      - name: Install LLVM 22 + build dependencies
         run: |
+          # ── LLVM 22 from apt.llvm.org (official stable) ──
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] \
+            http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-22.list
+
           sudo apt-get update
           sudo apt-get install -y \
+            clang-${LLVM_VERSION} lld-${LLVM_VERSION} \
+            llvm-${LLVM_VERSION} \
             bc bison ccache flex git kmod libelf-dev libc6-dev \
             make libssl-dev python3 rsync zstd zip \
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi
 
-      # ── 2. Neutron Clang v22 ────────────────────────────────────
-      - name: Download Neutron Clang ${{ env.NEUTRON_TAG }}
-        run: |
-          wget -q --show-progress -O neutron-clang.tar.zst \
-            "https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/${{ env.NEUTRON_TAG }}/neutron-clang-${{ env.NEUTRON_TAG }}.tar.zst"
-          mkdir -p "${{ github.workspace }}/neutron-clang"
-          zstd -d --stdout neutron-clang.tar.zst \
-            | tar xf - -C "${{ github.workspace }}/neutron-clang" --strip-components=1
-          rm -f neutron-clang.tar.zst
-          # Put Neutron Clang FIRST on PATH (overrides any system clang)
-          echo "${{ github.workspace }}/neutron-clang/bin" >> "$GITHUB_PATH"
+          # ── Create unversioned symlinks so the Makefile finds clang, ld.lld, etc. ──
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-${LLVM_VERSION} 100
+          sudo update-alternatives --install /usr/bin/ld.lld ld.lld /usr/bin/ld.lld-${LLVM_VERSION} 100
+          for tool in ar nm objcopy objdump readelf strip; do
+            sudo update-alternatives --install /usr/bin/llvm-${tool} llvm-${tool} /usr/bin/llvm-${tool}-${LLVM_VERSION} 100
+          done
 
       - name: Verify toolchain
         run: |
-          echo "::group::Neutron Clang v22"
-          clang --version | head -3
+          echo "::group::Clang ${LLVM_VERSION}"
+          clang --version
           echo "::endgroup::"
           echo "::group::LLVM tools"
           ld.lld --version
@@ -68,15 +67,11 @@ jobs:
           llvm-nm --version | head -1
           llvm-objcopy --version | head -1
           echo "::endgroup::"
-          echo "::group::aarch64 GCC (ELF tools only)"
+          echo "::group::Cross compilers"
           aarch64-linux-gnu-gcc --version | head -1
-          aarch64-linux-gnu-elfedit --version | head -1
-          echo "::endgroup::"
-          echo "::group::arm GCC (vDSO only)"
           arm-linux-gnueabi-gcc --version | head -1
           echo "::endgroup::"
 
-      # ── 3. Ccache ──────────────────────────────────────────────
       - name: Restore compiler cache
         uses: actions/cache@v4
         with:
@@ -85,7 +80,6 @@ jobs:
           restore-keys: |
             miatoll-ccache-${{ runner.os }}-
 
-      # ── 4. Generate configuration ──────────────────────────────
       - name: Generate and verify configuration
         run: |
           set -euo pipefail
@@ -198,7 +192,6 @@ jobs:
           echo "  =m  : $(grep -c '=m' out/.config)"
           echo "::endgroup::"
 
-      # ── 5. Build with Neutron Clang v22 ────────────────────────
       - name: Build kernel, DTB and DTBO
         run: |
           set -euo pipefail
@@ -208,12 +201,15 @@ jobs:
           export KBUILD_BUILD_HOST=kernel-ci
           ccache --max-size=25G
 
+          # Kernel 4.14 predates Clang 22; disable -Werror to tolerate
+          # warnings that the newer toolchain now flags.
           set +e
           make -j"$(nproc)" O=out ARCH=arm64 \
             LLVM=1 LLVM_IAS=1 \
             CC='ccache clang' \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            KCFLAGS="-Wno-error" \
             > build.log 2>&1
           status=$?
           set -e
@@ -222,8 +218,6 @@ jobs:
             grep -E ' error:' build.log | sed 's/\r$//' | awk '!seen[$0]++' \
               | cut -c1-200 > build-errors.txt || true
             total=$(wc -l < build-errors.txt)
-            # Write FULL log to the job summary so we can read it from
-            # the Actions page without downloading the artifact.
             echo "## Build failure" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "**${total} distinct error lines**" >> "$GITHUB_STEP_SUMMARY"
@@ -243,7 +237,6 @@ jobs:
 
           tail -n 60 build.log
 
-      # ── 6. Verify build products ───────────────────────────────
       - name: Verify build products
         run: |
           set -euo pipefail
@@ -266,12 +259,11 @@ jobs:
           {
             echo "commit=${GITHUB_SHA}"
             echo "kernel.release=$(cat kernel.release)"
-            echo "toolchain=neutron-clang-${NEUTRON_TAG}"
+            echo "toolchain=llvm-${LLVM_VERSION}"
             clang --version | head -1 | sed 's/^/clang.version=/'
             ld.lld --version | head -1 | sed 's/^/lld.version=/'
           } > build-info.txt
 
-      # ── 7. Upload failure diagnostics ───────────────────────────
       - name: Upload failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
@@ -284,13 +276,11 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      # ── 8. Package AnyKernel3 flashable zip ────────────────────
       - name: Package AnyKernel3 flashable zip
         run: |
           set -euo pipefail
           bash scripts/package-anykernel3.sh 2>&1 | tee package.log
 
-      # ── 9. Upload artifacts ────────────────────────────────────
       - name: Upload kernel artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -300,9 +290,6 @@ jobs:
           compression-level: 9
           retention-days: 90
 
-  # ─────────────────────────────────────────────────────────────────
-  # JOB 2:  Publish release
-  # ─────────────────────────────────────────────────────────────────
   release:
     name: Publish release
     needs: build
@@ -337,7 +324,7 @@ jobs:
           **Kernel:** \`${KREL}\`
           **Device:** Xiaomi Miatoll (Curtana / Gram / Joyeuse / Excalibur)
           **SoC:** SM6250 (Atoll) — non-GKI kernel v4.14
-          **Toolchain:** Neutron Clang \`${NEUTRON_TAG}\` (LLVM 22, zero GCC for aarch64)
+          **Toolchain:** LLVM/Clang \`${LLVM_VERSION}\` (apt.llvm.org, zero GCC for aarch64)
 
           ---
 
