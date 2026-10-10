@@ -2724,21 +2724,25 @@ errout:
 #endif
 static int ctnetlink_exp_done(struct netlink_callback *cb)
 {
-	if (cb->args[1])
-		nf_ct_expect_put((struct nf_conntrack_expect *)cb->args[1]);
 	return 0;
 }
 
+/*
+ * Fix CVE-2025-39764: use a cookie (expect id) instead of a pointer
+ * with refcount to track dump resumption position.  The old approach
+ * could double-increment the refcount on the same expectation object
+ * when exp == last, causing a permanent memory leak.
+ */
 static int
 ctnetlink_exp_dump_table(struct sk_buff *skb, struct netlink_callback *cb)
 {
 	struct net *net = sock_net(skb->sk);
-	struct nf_conntrack_expect *exp, *last;
+	struct nf_conntrack_expect *exp;
+	unsigned long last = cb->args[1];
 	struct nfgenmsg *nfmsg = nlmsg_data(cb->nlh);
 	u_int8_t l3proto = nfmsg->nfgen_family;
 
 	rcu_read_lock();
-	last = (struct nf_conntrack_expect *)cb->args[1];
 	for (; cb->args[0] < nf_ct_expect_hsize; cb->args[0]++) {
 restart:
 		hlist_for_each_entry_rcu(exp, &nf_ct_expect_hash[cb->args[0]],
@@ -2750,7 +2754,7 @@ restart:
 				continue;
 
 			if (cb->args[1]) {
-				if (exp != last)
+				if (nf_expect_get_id(exp) != last)
 					continue;
 				cb->args[1] = 0;
 			}
@@ -2759,9 +2763,7 @@ restart:
 						    cb->nlh->nlmsg_seq,
 						    IPCTNL_MSG_EXP_NEW,
 						    exp) < 0) {
-				if (!refcount_inc_not_zero(&exp->use))
-					continue;
-				cb->args[1] = (unsigned long)exp;
+				cb->args[1] = (unsigned long)nf_expect_get_id(exp);
 				goto out;
 			}
 		}
@@ -2772,16 +2774,18 @@ restart:
 	}
 out:
 	rcu_read_unlock();
-	if (last)
-		nf_ct_expect_put(last);
 
 	return skb->len;
 }
 
+/*
+ * Fix CVE-2025-39764: use cookie (expect id) instead of pointer+refcount.
+ */
 static int
 ctnetlink_exp_ct_dump_table(struct sk_buff *skb, struct netlink_callback *cb)
 {
-	struct nf_conntrack_expect *exp, *last;
+	struct nf_conntrack_expect *exp;
+	unsigned long last = cb->args[1];
 	struct nfgenmsg *nfmsg = nlmsg_data(cb->nlh);
 	struct nf_conn *ct = cb->data;
 	struct nf_conn_help *help = nfct_help(ct);
@@ -2791,13 +2795,12 @@ ctnetlink_exp_ct_dump_table(struct sk_buff *skb, struct netlink_callback *cb)
 		return 0;
 
 	rcu_read_lock();
-	last = (struct nf_conntrack_expect *)cb->args[1];
 restart:
 	hlist_for_each_entry_rcu(exp, &help->expectations, lnode) {
 		if (l3proto && exp->tuple.src.l3num != l3proto)
 			continue;
 		if (cb->args[1]) {
-			if (exp != last)
+			if (nf_expect_get_id(exp) != last)
 				continue;
 			cb->args[1] = 0;
 		}
@@ -2805,9 +2808,7 @@ restart:
 					    cb->nlh->nlmsg_seq,
 					    IPCTNL_MSG_EXP_NEW,
 					    exp) < 0) {
-			if (!refcount_inc_not_zero(&exp->use))
-				continue;
-			cb->args[1] = (unsigned long)exp;
+			cb->args[1] = (unsigned long)nf_expect_get_id(exp);
 			goto out;
 		}
 	}
@@ -2818,8 +2819,6 @@ restart:
 	cb->args[0] = 1;
 out:
 	rcu_read_unlock();
-	if (last)
-		nf_ct_expect_put(last);
 
 	return skb->len;
 }

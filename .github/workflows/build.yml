@@ -1,0 +1,164 @@
+# Stormbreaker Kernel CI/CD
+# Builds the miatoll (curtana/gram/joyeuse/excalibur) non-GKI 4.14 kernel
+# using Neutron Clang (LLVM-only, no GCC for aarch64) and produces an
+# AnyKernel3 flashable zip with Image.gz + dtbo.img.
+name: Build Stormbreaker Kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      neutron_tag:
+        description: "Neutron Clang release tag"
+        required: false
+        default: "06092026"
+
+# Cancel in-progress runs for the same branch/PR to save runner minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Neutron Clang tag to use (06092026 = Sep 6 2026, clang 22)
+  NEUTRON_TAG: ${{ github.event.inputs.neutron_tag || '06092026' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest    # 4 cores, 16 GB RAM (GitHub hosted)
+    timeout-minutes: 180
+    steps:
+      # ────────────────────────────────────────────────────────────
+      # 0.  Source code
+      # ────────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 0
+
+      # ────────────────────────────────────────────────────────────
+      # 1.  Ccache
+      # ────────────────────────────────────────────────────────────
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-miatoll-${{ runner.os }}-${{ hashFiles('arch/arm64/configs/**') }}
+          restore-keys: |
+            ccache-miatoll-${{ runner.os }}-
+
+      # ────────────────────────────────────────────────────────────
+      # 2.  Host dependencies
+      # ────────────────────────────────────────────────────────────
+      - name: Install host packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+              build-essential bc bison flex libssl-dev \
+              gcc-arm-linux-gnueabi \
+              ccache zstd python3 python3-pip
+          ccache -M 25G
+
+      # ────────────────────────────────────────────────────────────
+      # 3.  Neutron Clang (LLVM-only aarch64 toolchain)
+      # ────────────────────────────────────────────────────────────
+      - name: Download Neutron Clang ${{ env.NEUTRON_TAG }}
+        run: |
+          wget -q -O neutron-clang.tar.zst \
+            "https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/${{ env.NEUTRON_TAG }}/neutron-clang-${{ env.NEUTRON_TAG }}.tar.zst"
+          mkdir -p neutron-clang
+          zstd -d --stdout neutron-clang.tar.zst | tar xf - -C neutron-clang --strip-components=1
+          rm -f neutron-clang.tar.zst
+          echo "$(pwd)/neutron-clang/bin" >> $GITHUB_PATH
+
+      - name: Verify toolchain
+        run: |
+          clang --version | head -3
+          ld.lld --version
+          llvm-ar --version | head -1
+
+      # ────────────────────────────────────────────────────────────
+      # 4.  Merge defconfig with feature fragments
+      # ────────────────────────────────────────────────────────────
+      - name: Merge defconfig
+        run: |
+          scripts/merge-defconfig.sh \
+              arch/arm64/configs/vendor/xiaomi/miatoll_defconfig
+          scripts/config --file .config \
+              -d CONFIG_MODVERSIONS
+          echo "::group::Final config stats"
+          grep -c '=y' .config
+          grep -c '=m' .config
+          echo "::endgroup::"
+
+      # ────────────────────────────────────────────────────────────
+      # 5.  Build (pure LLVM, no GCC for aarch64)
+      # ────────────────────────────────────────────────────────────
+      - name: Build kernel
+        env:
+          # All four runners share the same runner type; pick max cores.
+          JOBS: "4"
+        run: |
+          make -j"${JOBS}" \
+              LLVM=1                \
+              LLVM_IAS=1            \
+              CC=clang              \
+              LD=ld.lld             \
+              AR=llvm-ar            \
+              NM=llvm-nm            \
+              OBJCOPY=llvm-objcopy  \
+              OBJDUMP=llvm-objdump  \
+              READELF=llvm-readelf  \
+              STRIP=llvm-strip      \
+              CLANG_TRIPLE=aarch64-linux-gnu- \
+              CROSS_COMPILE=        \
+              CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+              CONFIG_NO_ERROR_ON_MISMATCH=y
+          echo "::group::Build products"
+          ls -lh arch/arm64/boot/Image.gz
+          ls -lh arch/arm64/boot/dtbo.img
+          echo "::endgroup::"
+
+      # ────────────────────────────────────────────────────────────
+      # 6.  Package AnyKernel3 zip
+      # ────────────────────────────────────────────────────────────
+      - name: Package AnyKernel3 zip
+        id: zip
+        run: |
+          TANGGAL=$(date +"%Y%m%d-%H")
+          AK3="AnyKernel3-stormbreaker"
+          cp -r AnyKernel3 "$AK3"
+          cp arch/arm64/boot/Image.gz   "$AK3/"
+          cp arch/arm64/boot/dtbo.img   "$AK3/"
+          # Move kernel modules into the zip if any were built
+          find . -name "*.ko" -exec cp {} "$AK3/modules/system/lib/modules/" \; 2>/dev/null || true
+          # Clean placeholder dirs
+          rm -f "$AK3/.gitignore"
+          ZIPFILE="Stormbreaker-miatoll-${TANGGAL}.zip"
+          cd "$AK3"
+          zip -r9 "../$ZIPFILE" * -x .git README.md '*placeholder'
+          cd ..
+          echo "zipfile=$ZIPFILE" >> $GITHUB_OUTPUT
+          echo "Kernel image: $(wc -c < arch/arm64/boot/Image.gz) bytes"
+          echo "DTBO image  : $(wc -c < arch/arm64/boot/dtbo.img) bytes"
+          echo "Zip file    : $ZIPFILE ($(stat -c%s "$ZIPFILE") bytes)"
+          ls -lh "$ZIPFILE"
+
+      # ────────────────────────────────────────────────────────────
+      # 7.  Upload build artifact
+      # ────────────────────────────────────────────────────────────
+      - name: Upload AnyKernel3 zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.zip.outputs.zipfile }}
+          path: ${{ steps.zip.outputs.zipfile }}
+          compression-level: 0   # already zipped
+
+      # ────────────────────────────────────────────────────────────
+      # 8.  Upload build log on failure
+      # ────────────────────────────────────────────────────────────
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log

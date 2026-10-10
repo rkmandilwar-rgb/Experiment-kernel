@@ -3792,6 +3792,35 @@ static int cgroup_add_file(struct cgroup_subsys_state *css, struct cgroup *cgrp,
 		spin_unlock_irq(&cgroup_file_kn_lock);
 	}
 
+	/*
+	 * Droidspaces/LXC compatibility:
+	 *
+	 * When a hierarchy is mounted with the NOPREFIX flag the control
+	 * files are created without the "<subsys>." prefix.  Container
+	 * runtimes (Droidspaces, LXC and friends) still look the legacy
+	 * prefixed names up, e.g. "memory.limit_in_bytes", so publish them
+	 * again as links pointing at the real (unprefixed) file.
+	 *
+	 * Note: kernfs_create_link() either succeeds (returns a valid
+	 * pointer) or fails (returns ERR_PTR and frees everything it
+	 * allocated internally), so there is no memory leak if it fails.
+	 * We silently ignore the error here – worst case the prefixed name
+	 * is simply absent, which is the exact same state the kernel was in
+	 * before this patch.
+	 */
+	if (cft->ss && (cgrp->root->flags & CGRP_ROOT_NOPREFIX) &&
+	    !(cft->flags & CFTYPE_NO_PREFIX)) {
+		struct kernfs_node *link_kn;
+
+		snprintf(name, CGROUP_FILE_NAME_MAX, "%s.%s", cft->ss->name,
+			 cft->name);
+		link_kn = kernfs_create_link(cgrp->kn, name, kn);
+		if (IS_ERR(link_kn)) {
+			pr_warn_once("cgroup: failed to create prefixed link %s (%ld)\n",
+				     name, PTR_ERR(link_kn));
+		}
+	}
+
 	return 0;
 }
 
