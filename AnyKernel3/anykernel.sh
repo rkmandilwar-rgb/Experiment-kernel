@@ -45,17 +45,3 @@ PATCH_VBMETA_FLAG=auto;
 dump_boot;
 write_boot; # this also flashes vendor_dlkm, system_dlkm and dtbo if present
 ## end boot install
-
-
-## Stormbreaker performance tuning (Magisk service.d)
-if [ -d /data/adb/service.d ]; then
-  cp ramdisk/stormbreaker-tuning.sh /data/adb/service.d/stormbreaker-tuning.sh
-  chmod 0755 /data/adb/service.d/stormbreaker-tuning.sh
-  ui_print "- Stormbreaker tuning installed (Magisk service.d)"
-elif [ -d /system/etc/init.d ]; then
-  cp ramdisk/stormbreaker-tuning.sh /system/etc/init.d/stormbreaker-tuning.sh
-  chmod 0755 /system/etc/init.d/stormbreaker-tuning.sh
-  ui_print "- Stormbreaker tuning installed (init.d)"
-else
-  ui_print "- No service.d/init.d found, skipping tuning script"
-fi
