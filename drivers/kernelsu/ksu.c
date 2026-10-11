@@ -58,6 +58,9 @@
 #include "infra/file_wrapper.h"
 #include "infra/event_queue.h"
 #include "feature/adb_root.h"
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/susfs.h>
+#endif
 #include "feature/kernel_umount.h"
 #include "feature/selinux_hide.h"
 #include "feature/sucompat.h"
@@ -256,6 +259,10 @@ static int __init kernelsu_init(void)
 #endif
 
 	ksu_core_init();
+
+#ifdef CONFIG_KSU_SUSFS
+	susfs_init();
+#endif
 
 #if defined(CONFIG_KSU_KPROBES_KSUD) && !defined(CONFIG_KSU_TAMPER_SYSCALL_TABLE) && !defined(CONFIG_KSU_HACK_ARM64_BRANCH_LINK)
 	kp_ksud_init();
