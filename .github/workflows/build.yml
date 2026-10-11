@@ -1,0 +1,413 @@
+# Stormbreaker — build & release (miatoll)
+# Non-GKI kernel v4.14 for Curtana / Gram / Joyeuse / Excalibur
+# Built with LLVM 22 from apt.llvm.org (official), no GCC for aarch64.
+name: Build & Release Stormbreaker Kernel
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - arena/7d79595b-experiment-kernel
+
+permissions:
+  contents: write
+
+concurrency:
+  group: miatoll-kernel-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ARCH: arm64
+  DEFCONFIG: vendor/xiaomi/miatoll_defconfig
+  LLVM_VERSION: "22"
+
+jobs:
+  build:
+    name: Compile and verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+
+      - name: Install LLVM 22 + build dependencies
+        run: |
+          # ── LLVM 22 from apt.llvm.org (official stable) ──
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] \
+            http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-22.list
+
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang-${LLVM_VERSION} lld-${LLVM_VERSION} \
+            llvm-${LLVM_VERSION} \
+            bc bison ccache flex git kmod libelf-dev libc6-dev \
+            make libssl-dev python3 rsync zstd zip \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabi
+
+          # ── Remove system clang to avoid conflicts with LLVM 22 ──
+          sudo apt-get remove -y clang clang-18 lld lld-18 2>/dev/null || true
+
+          # ── Create unversioned symlinks so the Makefile finds clang, ld.lld, etc. ──
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-${LLVM_VERSION} 100
+          sudo update-alternatives --install /usr/bin/ld.lld ld.lld /usr/bin/ld.lld-${LLVM_VERSION} 100
+          for tool in ar nm objcopy objdump readelf strip; do
+            sudo update-alternatives --install /usr/bin/llvm-${tool} llvm-${tool} /usr/bin/llvm-${tool}-${LLVM_VERSION} 100
+          done
+
+      - name: Verify toolchain
+        run: |
+          echo "::group::Clang ${LLVM_VERSION}"
+          clang --version
+          echo "::endgroup::"
+          echo "::group::LLVM tools"
+          ld.lld --version
+          llvm-ar --version | head -1
+          llvm-nm --version | head -1
+          llvm-objcopy --version | head -1
+          echo "::endgroup::"
+          echo "::group::Cross compilers"
+          aarch64-linux-gnu-gcc --version | head -1
+          arm-linux-gnueabi-gcc --version | head -1
+          echo "::endgroup::"
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: miatoll-ccache-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            miatoll-ccache-${{ runner.os }}-
+
+      - name: Generate and verify configuration
+        run: |
+          set -euo pipefail
+
+          DEFCONFIG_PATH="arch/arm64/configs/$DEFCONFIG"
+          test -f "$DEFCONFIG_PATH"
+
+          # ── Merge fragments into a temporary defconfig ──
+          MERGED="arch/arm64/configs/vendor/xiaomi/stormbreaker_defconfig"
+          cp "$DEFCONFIG_PATH" "$MERGED"
+          scripts/merge-defconfig.sh "$MERGED"
+
+          # ── Generate .config from merged defconfig ──
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            vendor/xiaomi/stormbreaker_defconfig
+
+          # ── Disable modversions (clang-built CRC drift) ──
+          scripts/config --file out/.config -d CONFIG_MODVERSIONS
+
+          # ── Fill in dependencies silently ──
+          make O=out ARCH=arm64 olddefconfig
+
+          # ── Clean up temp defconfig ──
+          rm -f "$MERGED"
+
+          # ── Verify required features ──
+          require() {
+            grep -qx "$1" out/.config || {
+              echo "::error::Required config missing: $1"
+              exit 1
+            }
+          }
+          echo "::group::Config verification"
+
+          # eBPF
+          require 'CONFIG_BPF=y'
+          require 'CONFIG_BPF_SYSCALL=y'
+          require 'CONFIG_BPF_JIT=y'
+          require 'CONFIG_CGROUP_BPF=y'
+          require 'CONFIG_NET_CLS_BPF=y'
+          require 'CONFIG_LWTUNNEL_BPF=y'
+
+          # EROFS
+          require 'CONFIG_EROFS_FS=y'
+          require 'CONFIG_EROFS_FS_ZIP=y'
+
+          # NTFS
+          require 'CONFIG_NTFS_FS=y'
+          require 'CONFIG_NTFS_RW=y'
+
+          # BBR
+          require 'CONFIG_TCP_CONG_BBR=y'
+
+          # Droidspaces / namespaces
+          require 'CONFIG_SYSVIPC=y'
+          require 'CONFIG_POSIX_MQUEUE=y'
+          require 'CONFIG_NAMESPACES=y'
+          require 'CONFIG_PID_NS=y'
+          require 'CONFIG_UTS_NS=y'
+          require 'CONFIG_IPC_NS=y'
+          require 'CONFIG_NET_NS=y'
+          require 'CONFIG_USER_NS=y'
+          require 'CONFIG_SECCOMP=y'
+          require 'CONFIG_SECCOMP_FILTER=y'
+          require 'CONFIG_CGROUP_DEVICE=y'
+          require 'CONFIG_CGROUP_PIDS=y'
+          require 'CONFIG_CGROUP_FREEZER=y'
+          require 'CONFIG_CGROUP_NET_PRIO=y'
+          require 'CONFIG_CGROUP_CPUACCT=y'
+          require 'CONFIG_DEVTMPFS=y'
+          require 'CONFIG_OVERLAY_FS=y'
+          require 'CONFIG_VETH=y'
+          require 'CONFIG_BRIDGE=y'
+          require 'CONFIG_BRIDGE_NETFILTER=y'
+          require 'CONFIG_NF_CONNTRACK=y'
+          require 'CONFIG_NF_NAT=y'
+          require 'CONFIG_NF_TABLES=y'
+          require 'CONFIG_NF_NAT_IPV4=y'
+          require 'CONFIG_IP_NF_NAT=y'
+          require 'CONFIG_IP_NF_TARGET_MASQUERADE=y'
+          require 'CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y'
+          require 'CONFIG_IP6_NF_NAT=y'
+          require 'CONFIG_IP6_NF_TARGET_MASQUERADE=y'
+          require 'CONFIG_IP_SET=y'
+
+          # NetHunter
+          require 'CONFIG_USB_ACM=y'
+          require 'CONFIG_USB_GADGET=y'
+          require 'CONFIG_USB_CONFIGFS=y'
+          require 'CONFIG_USB_CONFIGFS_F_HID=y'
+          require 'CONFIG_USB_CONFIGFS_MASS_STORAGE=y'
+          require 'CONFIG_USB_MON=y'
+          require 'CONFIG_CAN=y'
+          require 'CONFIG_CAN_RAW=y'
+          require 'CONFIG_CAN_VCAN=y'
+          require 'CONFIG_NFSD=y'
+          require 'CONFIG_CFG80211=y'
+          require 'CONFIG_MAC80211=y'
+          require 'CONFIG_ATH9K_HTC=y'
+          require 'CONFIG_CARL9170=y'
+          require 'CONFIG_BT=y'
+          require 'CONFIG_BT_RFCOMM=y'
+          require 'CONFIG_HIDRAW=y'
+          require 'CONFIG_UHID=y'
+
+          echo "::endgroup::"
+          echo "::group::Config stats"
+          echo "  =y  : $(grep -c '=y' out/.config)"
+          echo "  =m  : $(grep -c '=m' out/.config)"
+          echo "::endgroup::"
+
+      - name: Build kernel, DTB and DTBO
+        run: |
+          set -euo pipefail
+          export USE_CCACHE=1
+          export CCACHE_DIR="$HOME/.cache/ccache"
+          export KBUILD_BUILD_USER=stormbreaker
+          export KBUILD_BUILD_HOST=kernel-ci
+          ccache --max-size=25G
+
+          # Kernel 4.14 predates Clang 22; disable -Werror to tolerate
+          # warnings that the newer toolchain now flags.
+          set +e
+          make -j"$(nproc)" O=out ARCH=arm64 \
+            LLVM=1 LLVM_IAS=1 \
+            CC='ccache clang-22' HOSTCC='ccache clang-22' \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            KCFLAGS="-Wno-error" \
+            > build.log 2>&1
+          status=$?
+          set -e
+
+          if [ "$status" -ne 0 ]; then
+            grep -E ' error:|fatal error:' build.log | sed 's/\r$//' | awk '!seen[$0]++' \
+              | cut -c1-200 > build-errors.txt || true
+            total=$(wc -l < build-errors.txt)
+            # Emit each error as a GitHub annotation (visible in API)
+            while IFS= read -r line; do
+              echo "::error::$line"
+            done < build-errors.txt
+            echo "## Build failure" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "**${total} distinct error lines**" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Errors" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            head -50 build-errors.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Last 200 lines of build.log" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -200 build.log >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Kernel build failed (${total} distinct errors). See summary."
+            exit "$status"
+          fi
+
+          tail -n 60 build.log
+
+      - name: Verify build products
+        run: |
+          set -euo pipefail
+          check_file() {
+            test -s "$1" || { echo "::error::Missing: $1"; exit 1; }
+            echo "ok: $1"
+          }
+          check_file out/arch/arm64/boot/Image.gz
+          check_file out/arch/arm64/boot/dtbo.img
+          check_file out/arch/arm64/boot/dts/qcom/cust-atoll-ab.dtb
+
+          echo "::group::SHA256"
+          sha256sum out/arch/arm64/boot/Image.gz
+          sha256sum out/arch/arm64/boot/dtbo.img
+          sha256sum out/arch/arm64/boot/dts/qcom/cust-atoll-ab.dtb
+          echo "::endgroup::"
+
+          make -s O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- kernelrelease \
+            | tee kernel.release
+
+          {
+            echo "commit=${GITHUB_SHA}"
+            echo "kernel.release=$(cat kernel.release)"
+            echo "toolchain=llvm-${LLVM_VERSION}"
+            clang --version | head -1 | sed 's/^/clang.version=/'
+            ld.lld --version | head -1 | sed 's/^/lld.version=/'
+          } > build-info.txt
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: miatoll-build-failure-${{ github.run_number }}
+          path: |
+            build.log
+            build-errors.txt
+            out/.config
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Package AnyKernel3 flashable zip
+        run: |
+          set -euo pipefail
+          bash scripts/package-anykernel3.sh 2>&1 | tee package.log
+
+      - name: Upload kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: miatoll-kernel-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: error
+          compression-level: 9
+          retention-days: 90
+
+  release:
+    name: Publish release
+    needs: build
+    if: false  # disabled for testing — re-enable when ready to release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: miatoll-kernel-${{ github.run_number }}
+          path: release-assets
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="stormbreaker-${{ github.run_number }}"
+
+          KREL=$(grep kernel.release release-assets/build-info.txt \
+                 | cut -d= -f2 || echo "unknown")
+
+          cat > release-notes.md << EOF
+          # Stormbreaker Kernel — miatoll
+
+          **Kernel:** \`${KREL}\`
+          **Device:** Xiaomi Miatoll (Curtana / Gram / Joyeuse / Excalibur)
+          **SoC:** SM6250 (Atoll) — non-GKI kernel v4.14
+          **Toolchain:** LLVM/Clang \`${LLVM_VERSION}\` (apt.llvm.org, zero GCC for aarch64)
+
+          ---
+
+          ## ✨ Features
+
+          ### eBPF (extended Berkeley Packet Filter)
+          - \`BPF_SYSCALL=y\` — BPF syscall + arm64 JIT (\`BPF_JIT_ALWAYS_ON\`)
+          - cgroup-bpf, kprobe / uprobe / tracepoint attach types
+          - cls_bpf, act_bpf, lwtunnel BPF, \`NETFILTER_XT_MATCH_BPF\`
+          - BPF stream parser (sockmap / sk_msg), BPF events
+
+          ### NTFS support
+          - **Legacy NTFS** (\`NTFS_FS=y\`, \`NTFS_RW=y\`) — read + partial write
+          - **Paragon NTFS3** read-write driver (\`fs/ntfs3/\`, backported to 4.14)
+            - Normal / sparse / compressed files, journal replaying
+            - POSIX ACLs, LZX / XPRESS decompression
+            - Coexists with legacy driver: \`mount -t ntfs3\`
+
+          ### EROFS (Enhanced Read-Only File System)
+          - \`EROFS_FS=y\` with LZ4 compression
+          - Extended attributes, POSIX ACL, security labels
+          - Mounts system / vendor EROFS partitions natively
+
+          ### BBRv1 congestion control
+          - BBR v1 as default TCP congestion control (\`DEFAULT_TCP_CONG="bbr"\`)
+          - fq pacing qdisc (\`NET_SCH_FQ=y\`) — mandatory for BBR
+          - CUBIC and RENO still compiled in; BBR is the new default
+
+          ### Droidspaces (Linux containers on Android)
+          - Full namespace isolation: PID, UTS, IPC, NET, USER
+          - cgroup controllers: device, sched, freezer, net_prio, cpuacct, pids, CFS bandwidth, memory
+          - seccomp + seccomp filter
+          - devtmpfs + auto-mount, overlayfs (volatile mode)
+          - Full netfilter stack: conntrack, NAT, nftables, bridge netfilter, VETH
+          - IPv6 NAT (NAT66), UFW / fail2ban firewall inside containers
+          - Docker-in-container: HUGETLBFS, CHECKPOINT_RESTORE, MACVLAN, VXLAN, INET_DIAG, vsock
+          - Cgroup NOPREFIX symlink fix for Droidspaces / LXC compatibility
+
+          ### Kali NetHunter support
+          - **USB Gadget (configfs):** HID (BadUSB), CDC ACM, ECM, NCM, RNDIS, Mass Storage, EEM
+          - **USB traffic monitoring:** \`USB_MON=y\`
+          - **CAN bus:** vcan, slcan, all USB CAN adaptors (EMS, ESD, GS, Kvaser, PEAK, 8DEV, MCBA)
+          - **Bluetooth Arsenal:** RFCOMM TTY, BNEP, HIDP, hcibtusb
+          - **NFS server + client:** v2 / v3 / v4
+          - **mac80211 + external USB Wi-Fi:** ath9k_htc, carl9170, rt2x00 (rt2500usb/rt73usb/rt2800usb), mt7601u, rtl8187, rtl8xxxu, zd1211rw
+          - **USB serial:** CH341, FTDI, PL2303, CP210X
+          - **SDR:** DVB RTL28XXU
+
+          ### Security fixes
+          - **CVE-2025-39764** — Fixed memory leak in nf_conntrack expectation dumpers (pointer+refcount → cookie)
+          - **Cgroup NOPREFIX** — symlink fix with proper IS_ERR() error handling
+
+          ---
+
+          ## 📦 Flashing
+
+          \`\`\`
+          # TWRP / custom recovery:
+          # 1. Flash the .zip
+          # 2. Reboot
+          # 3. Verify Droidspaces: su -c droidspaces check
+          \`\`\`
+
+          **Contents:** \`Image.gz\` + \`dtbo.img\` (all four miatoll variants)
+          EOF
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release delete "$TAG" --yes --cleanup-tag
+          fi
+
+          gh release create "$TAG" \
+            --target "${{ github.sha }}" \
+            --title "Stormbreaker Kernel miatoll — build ${{ github.run_number }}" \
+            --notes-file release-notes.md \
+            release-assets/Stormbreaker-miatoll-*.zip
+
+          gh release view "$TAG" --json url --jq '.url'
