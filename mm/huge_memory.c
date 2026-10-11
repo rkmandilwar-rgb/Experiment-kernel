@@ -2327,7 +2327,11 @@ static void unmap_page(struct page *page)
 	if (PageAnon(page))
 		ttu_flags |= TTU_SPLIT_FREEZE;
 
-	try_to_unmap(page, ttu_flags);
+	/* this tree's try_to_unmap takes a third target_vma arg (NULL =
+	 * unmap from all VMAs); THP was historically disabled here so this
+	 * call site was never updated for the QC signature.
+	 */
+	try_to_unmap(page, ttu_flags, NULL);
 
 	VM_WARN_ON_ONCE_PAGE(page_mapped(page), page);
 }
