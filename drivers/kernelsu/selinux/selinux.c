@@ -14,6 +14,57 @@ static u32 cached_su_sid __read_mostly = 0;
 static u32 cached_zygote_sid __read_mostly = 0;
 static u32 cached_init_sid __read_mostly = 0;
 u32 ksu_file_sid __read_mostly = 0;
+#ifdef CONFIG_KSU_SUSFS
+#define KERNEL_INIT_DOMAIN "u:r:init:s0"
+#define KERNEL_ZYGOTE_DOMAIN "u:r:zygote:s0"
+#define KERNEL_PRIV_APP_DOMAIN "u:r:priv_app:s0"
+u32 susfs_ksu_sid = 0;
+u32 susfs_init_sid = 0;
+u32 susfs_zygote_sid = 0;
+u32 susfs_priv_app_sid = 0;
+
+static inline void susfs_set_sid(const char *secctx_name, u32 *out_sid)
+{
+    int error;
+    error = security_secctx_to_secid(secctx_name, strlen(secctx_name), out_sid);
+    if (error) {
+        pr_err("susfs: failed to get sid for '%s', err: %d\n", secctx_name, error);
+        *out_sid = 0;
+    } else {
+        pr_info("susfs: sid for '%s' = %u\n", secctx_name, *out_sid);
+    }
+}
+
+bool susfs_is_sid_equal(const struct cred *cred, u32 sid2) {
+    u32 sid;
+    struct task_security_struct *tsec;
+    tsec = selinux_cred(cred);
+    sid = tsec->sid;
+    return (sid == sid2);
+}
+
+u32 susfs_get_current_sid(void) {
+    struct task_security_struct *tsec = selinux_cred(current_cred());
+    return tsec->sid;
+}
+
+void susfs_set_zygote_sid(void) {
+    susfs_set_sid(KERNEL_ZYGOTE_DOMAIN, &susfs_zygote_sid);
+}
+
+void susfs_set_ksu_sid(void) {
+    susfs_set_sid(KERNEL_SU_CONTEXT, &susfs_ksu_sid);
+}
+
+void susfs_set_init_sid(void) {
+    susfs_set_sid(KERNEL_INIT_DOMAIN, &susfs_init_sid);
+}
+
+void susfs_set_priv_app_sid(void) {
+    susfs_set_sid(KERNEL_PRIV_APP_DOMAIN, &susfs_priv_app_sid);
+}
+#endif /* CONFIG_KSU_SUSFS */
+
 
 static int transive_to_domain(const char *domain, struct cred *cred, bool clear_exec_sid)
 {

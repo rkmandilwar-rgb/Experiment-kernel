@@ -1,3 +1,11 @@
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/susfs_def.h>
+extern u32 susfs_zygote_sid;
+extern bool susfs_is_sid_equal(const struct cred *cred, u32 sid2);
+extern void susfs_try_umount(uid_t uid);
+extern void susfs_set_current_proc_umounted(void);
+#endif
+
 static __always_inline void ksu_handle_setresuid_cred(struct cred *new, const struct cred *old)
 {
 	if (!new || !old)
@@ -13,6 +21,13 @@ static __always_inline void ksu_handle_setresuid_cred(struct cred *new, const st
 	if (IS_ENABLED(CONFIG_KSU_DEBUG))
 		pr_info("handle_setresuid from %d to %d\n", old_uid, new_uid);
 
+#ifdef CONFIG_KSU_SUSFS
+	// SUSFS: check if current process is zygote domain
+	if (susfs_zygote_sid && !susfs_is_sid_equal(current_cred(), susfs_zygote_sid)) {
+		// not zygote, skip
+	}
+#endif
+
 	// we dont have those new fancy things upstream has
 	// lets just do the original thing where we disable seccomp
 	if (unlikely(is_uid_manager(new_uid)))
@@ -23,6 +38,13 @@ static __always_inline void ksu_handle_setresuid_cred(struct cred *new, const st
 
 	// Handle kernel umount
 	ksu_handle_umount(new, old);
+
+#ifdef CONFIG_KSU_SUSFS
+	// SUSFS: try_umount for non-root processes
+	susfs_try_umount(new_uid);
+	// SUSFS: mark current process as umounted
+	susfs_set_current_proc_umounted();
+#endif
 	return;
 
 install_ksu_fd:

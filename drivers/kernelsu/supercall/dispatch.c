@@ -1,3 +1,7 @@
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/susfs.h>
+#endif
+
 static int do_grant_root(void __user *arg)
 {
 	int ret;
@@ -81,6 +85,9 @@ static int do_report_event(void __user *arg)
 			post_fs_data_lock = true;
 			pr_info("post-fs-data triggered\n");
 			on_post_fs_data();
+#ifdef CONFIG_KSU_SUSFS
+			susfs_start_sdcard_monitor_fn();
+#endif
 		}
 		break;
 	}
