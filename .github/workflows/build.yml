@@ -146,6 +146,11 @@ jobs:
           require 'CONFIG_RD_LZO=y'
           require 'CONFIG_RD_LZ4=y'
 
+          # KernelSU-Next
+          require 'CONFIG_KPROBES=y'
+          require 'CONFIG_KRETPROBES=y'
+          require 'CONFIG_KSU=y'
+
           # Droidspaces / namespaces
           require 'CONFIG_SYSVIPC=y'
           require 'CONFIG_POSIX_MQUEUE=y'
