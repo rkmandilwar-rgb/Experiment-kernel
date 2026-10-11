@@ -302,7 +302,7 @@ jobs:
   release:
     name: Publish release
     needs: build
-    if: success()
+    if: false  # disabled for testing — re-enable when ready to release
     runs-on: ubuntu-24.04
     permissions:
       contents: write
