@@ -27,6 +27,7 @@ frags=(
     kernel/configs/miatoll/bbr.config
     kernel/configs/miatoll/droidspaces.config
     kernel/configs/miatoll/nethunter.config
+    kernel/configs/miatoll/ramdisk.config
 )
 
 echo "merge-defconfig.sh"

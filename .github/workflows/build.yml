@@ -137,6 +137,14 @@ jobs:
           # BBR
           require 'CONFIG_TCP_CONG_BBR=y'
 
+          # Ramdisk decompressors (all supported in 4.14)
+          require 'CONFIG_RD_GZIP=y'
+          require 'CONFIG_RD_BZIP2=y'
+          require 'CONFIG_RD_LZMA=y'
+          require 'CONFIG_RD_XZ=y'
+          require 'CONFIG_RD_LZO=y'
+          require 'CONFIG_RD_LZ4=y'
+
           # Droidspaces / namespaces
           require 'CONFIG_SYSVIPC=y'
           require 'CONFIG_POSIX_MQUEUE=y'
