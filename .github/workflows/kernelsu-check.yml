@@ -1,0 +1,110 @@
+# TEMPORARY diagnostic: compile only drivers/kernelsu/ with `make -k` so every
+# compile error is reported in one run, and publish the full list as a
+# check-run output (GitHub caps step annotations at 10, and the job logs are
+# not downloadable from the dev sandbox).
+name: KernelSU compile check
+
+on:
+  push:
+    branches:
+      - arena/5767b23a-experiment-kernel
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+
+concurrency:
+  group: kernelsu-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  driver:
+    name: Compile drivers/kernelsu
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install LLVM 22 + deps
+        run: |
+          set -euo pipefail
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] \
+            http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-22.list
+          sudo apt-get update
+          sudo apt-get install -y clang-22 lld-22 llvm-22 \
+            bc bison flex libelf-dev libc6-dev make libssl-dev python3 rsync \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu gcc-arm-linux-gnueabi
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-22 100
+          sudo update-alternatives --install /usr/bin/ld.lld ld.lld /usr/bin/ld.lld-22 100
+          for tool in ar nm objcopy objdump readelf strip; do
+            sudo update-alternatives --install /usr/bin/llvm-${tool} llvm-${tool} /usr/bin/llvm-${tool}-22 100
+          done
+          clang --version | head -1
+
+      - name: Generate configuration (same as build.yml)
+        run: |
+          set -euo pipefail
+          DEFCONFIG_PATH="arch/arm64/configs/vendor/xiaomi/miatoll_defconfig"
+          MERGED="arch/arm64/configs/vendor/xiaomi/stormbreaker_defconfig"
+          cp "$DEFCONFIG_PATH" "$MERGED"
+          scripts/merge-defconfig.sh "$MERGED"
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            vendor/xiaomi/stormbreaker_defconfig
+          scripts/config --file out/.config -d CONFIG_MODVERSIONS
+          make O=out ARCH=arm64 olddefconfig
+          rm -f "$MERGED"
+          grep -E '^CONFIG_(KSU|KPROBES|KRETPROBES|RD_LZ4)=' out/.config
+
+      - name: modules_prepare (generates headers)
+        run: |
+          set -euo pipefail
+          make -j"$(nproc)" O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- modules_prepare > prepare.log 2>&1 \
+            || { tail -100 prepare.log; exit 1; }
+          tail -5 prepare.log
+
+      - name: Compile drivers/kernelsu (keep going on errors)
+        run: |
+          make -k -j"$(nproc)" O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            drivers/kernelsu/ > ksu.log 2>&1 || true
+          echo "errors: $(grep -cE ' (fatal )?error:' ksu.log || true)"
+
+      - name: Publish every error
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          grep -E ' (fatal )?error:' ksu.log | sed 's#^\.\./##' | sort -u > errors.txt || true
+          n=$(wc -l < errors.txt)
+          echo "distinct errors: $n"
+          cat errors.txt
+          [ -s errors.txt ] || echo "(no error lines found)" > errors.txt
+          head -c 60000 errors.txt > errors-trim.txt
+          gh api "repos/${GITHUB_REPOSITORY}/check-runs" \
+            -f name="KernelSU compile errors" \
+            -f head_sha="${GITHUB_SHA}" \
+            -f status=completed \
+            -f conclusion=neutral \
+            -f 'output[title]=distinct errors: '"$n" \
+            -f 'output[summary]=All compiler errors from drivers/kernelsu (make -k).' \
+            -F 'output[text]=@errors-trim.txt' > /dev/null || echo "check-run post failed"
+
+      - name: Upload full log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernelsu-check-log
+          path: |
+            ksu.log
+            errors.txt
+          if-no-files-found: ignore
+          retention-days: 3
