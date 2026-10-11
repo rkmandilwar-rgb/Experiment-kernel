@@ -1,13 +1,34 @@
 # Stormbreaker — build & release (miatoll)
-# Non-GKI kernel v4.14 for Curtana / Gram / Joyeuse / Excalibur
+# Non-GKI kernel v4.14.357 for Curtana / Gram / Joyeuse / Excalibur
 # Built with LLVM 22 from apt.llvm.org (official), no GCC for aarch64.
+#
+# Root/hiding stack baked in:
+#   - KernelSU (backslashxx fork) v3.3.0+72 — drivers/kernelsu, manual hooks
+#     (issue #5 rev v2.3) + LSM security hooks
+#   - SUSFS v2.3.0 — non-GKI 4.14 semantic port (fs/susfs.c + fs hooks),
+#     userspace ABI bridged over the KernelSU reboot supercall
+#   - NoMount v2.1.0 — fs/nomount VFS path redirection (+ post-release
+#     evict_inode fix 7e7342cd4)
+#   - Companion module zips attached to every build: BRENE (SUSFS control
+#     panel) and the NoMount metamodule
 name: Build & Release Stormbreaker Kernel
 
 on:
   workflow_dispatch:
+    inputs:
+      runner:
+        description: 'Runner to build on (larger runners need a paid plan / org)'
+        type: choice
+        default: ubuntu-24.04
+        options:
+          - ubuntu-24.04
+          - ubuntu-latest-8-cores
+          - ubuntu-latest-16-cores
+          - ubuntu-latest-32-cores
+          - ubuntu-latest-64-cores
   push:
     branches:
-      - arena/7d79595b-experiment-kernel
+      - arena/7e8eb3ac-experiment-kernel
 
 permissions:
   contents: write
@@ -20,16 +41,37 @@ env:
   ARCH: arm64
   DEFCONFIG: vendor/xiaomi/miatoll_defconfig
   LLVM_VERSION: "22"
+  # Companion userspace modules bundled with every kernel build
+  BRENE_REPO: rrr333nnn333/BRENE
+  BRENE_TAG: v0.0.70
+  BRENE_ASSET: BRENE-v0.0.70.zip
+  NOMOUNT_REPO: maxsteeel/nomount
+  NOMOUNT_TAG: v2.1.0
+  NOMOUNT_ASSET: NoMount-v2.1.0-release-500.zip
 
 jobs:
   build:
     name: Compile and verify
-    runs-on: ubuntu-24.04
+    # ubuntu-24.04 = biggest free GitHub-hosted runner for public repos
+    # (4 vCPU / 16 GB RAM / 175 GB SSD). Pick a larger runner via
+    # workflow_dispatch when the repo has access to paid larger runners;
+    # everything below scales with nproc automatically.
+    runs-on: ${{ inputs.runner || 'ubuntu-24.04' }}
     timeout-minutes: 240
 
     steps:
       - name: Checkout kernel source
         uses: actions/checkout@v4
+
+      - name: Report runner resources
+        run: |
+          echo "::group::Runner"
+          echo "label    : ${{ inputs.runner || 'ubuntu-24.04' }}"
+          echo "cpus     : $(nproc)"
+          lscpu | grep -E 'Model name|Socket|Core|Thread' || true
+          free -h
+          df -h /mnt /  2>/dev/null | tail -2
+          echo "::endgroup::"
 
       - name: Install LLVM 22 + build dependencies
         run: |
@@ -116,6 +158,12 @@ jobs:
               exit 1
             }
           }
+          require_off() {
+            if grep -q "^${1}=y" out/.config; then
+              echo "::error::Config must stay disabled: $1"
+              exit 1
+            fi
+          }
           echo "::group::Config verification"
 
           # eBPF
@@ -188,6 +236,45 @@ jobs:
           require 'CONFIG_BT_RFCOMM=y'
           require 'CONFIG_HIDRAW=y'
           require 'CONFIG_UHID=y'
+
+          # KernelSU (backslashxx v3.3.0+72)
+          require 'CONFIG_KSU=y'
+          require 'CONFIG_KSU_LSM_SECURITY_HOOKS=y'
+          require 'CONFIG_KSU_HEURISTIC_IN_TREE_BUILD=y'
+          require_off 'CONFIG_KSU_KPROBES_KSUD'
+          require_off 'CONFIG_KSU_TAMPER_SYSCALL_TABLE'
+          require_off 'CONFIG_KSU_HACK_ARM64_BRANCH_LINK'
+
+          # SUSFS v2.3.0 (non-GKI 4.14 port, supercall-bridged)
+          require 'CONFIG_KSU_SUSFS=y'
+          require 'CONFIG_KSU_SUSFS_SUS_PATH=y'
+          require 'CONFIG_KSU_SUSFS_SUS_MOUNT=y'
+          require 'CONFIG_KSU_SUSFS_SUS_KSTAT=y'
+          require 'CONFIG_KSU_SUSFS_SPOOF_UNAME=y'
+          require 'CONFIG_KSU_SUSFS_ENABLE_LOG=y'
+          require 'CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y'
+          require 'CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y'
+          require 'CONFIG_KSU_SUSFS_OPEN_REDIRECT=y'
+          require 'CONFIG_KSU_SUSFS_SUS_MAP=y'
+          require 'CONFIG_FUSE_FS=y'   # KSU_SUSFS hard dependency
+
+          # NoMount v2.1.0
+          require 'CONFIG_NOMOUNT=y'
+
+          # ── Source-level version contract ──
+          grep -q 'SUSFS_VERSION "v2.3.0"' include/linux/susfs.h \
+            || { echo "::error::SUSFS is not v2.3.0"; exit 1; }
+          grep -q 'KSU_VERSION=32673' drivers/kernelsu/Makefile \
+            || { echo "::error::KernelSU is not v3.3.0+72 (32673)"; exit 1; }
+          grep -q 'NOMOUNT_BASE_VERSION "21"' fs/nomount/nomount.h \
+            || { echo "::error::NoMount is not the v2.1.0 line"; exit 1; }
+          # SUSFS userspace ABI must be bridged into the KSU supercall
+          grep -q 'SUSFS_MAGIC' drivers/kernelsu/supercall/supercall.c \
+            || { echo "::error::KSU<->SUSFS supercall bridge missing"; exit 1; }
+          grep -q 'susfs_is_current_ksu_domain' drivers/kernelsu/selinux/selinux.c \
+            || { echo "::error::KSU selinux SUSFS glue missing"; exit 1; }
+          grep -q 'susfs_init();' drivers/kernelsu/ksu.c \
+            || { echo "::error::KSU susfs_init glue missing"; exit 1; }
 
           echo "::endgroup::"
           echo "::group::Config stats"
@@ -290,6 +377,44 @@ jobs:
           set -euo pipefail
           bash scripts/package-anykernel3.sh 2>&1 | tee package.log
 
+      - name: Attach companion modules (BRENE + NoMount metamodule)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          # Userspace companions for the baked-in kernel features:
+          #  - BRENE: SUSFS control panel + ksu_susfs tool (talks to this
+          #    kernel's SUSFS v2.3.0 over the KSU reboot supercall)
+          #  - NoMount metamodule: activates the built-in fs/nomount
+          fetch_asset() {
+            local repo="$1" tag="$2" asset="$3"
+            for attempt in 1 2 3; do
+              if gh release download "$tag" -R "$repo" -p "$asset" \
+                   -D artifacts --clobber; then
+                if [ -s "artifacts/$asset" ] && head -c2 "artifacts/$asset" | grep -q PK; then
+                  echo "ok: $asset (from $repo@$tag)"
+                  return 0
+                fi
+              fi
+              echo "retry $attempt for $repo@$tag/$asset"
+              sleep $((attempt * 10))
+            done
+            echo "::warning::could not fetch $asset from $repo@$tag — kernel zip is unaffected"
+            return 1
+          }
+          fetch_asset "$BRENE_REPO"   "$BRENE_TAG"   "$BRENE_ASSET"   || true
+          fetch_asset "$NOMOUNT_REPO" "$NOMOUNT_TAG" "$NOMOUNT_ASSET" || true
+
+          # extend checksums
+          (
+            cd artifacts
+            for z in "$BRENE_ASSET" "$NOMOUNT_ASSET"; do
+              [ -f "$z" ] && sha256sum "$z" >> SHA256SUMS
+            done
+            sort -u SHA256SUMS -o SHA256SUMS
+          )
+          ls -la artifacts/
+
       - name: Upload kernel artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -338,6 +463,19 @@ jobs:
           ---
 
           ## ✨ Features
+
+          ### Root & hiding stack
+          - **KernelSU** — backslashxx fork \`v3.3.0+72\` (driver 32673), in-tree at
+            \`drivers/kernelsu\`, manual hooks (issue #5 rev v2.3) + LSM security hooks;
+            kprobe / syscall-table / branch-link hooking disabled
+          - **SUSFS v2.3.0** — non-GKI 4.14 semantic port (\`fs/susfs.c\`):
+            sus_path, sus_mount, sus_kstat, sus_map, open_redirect, uname/cmdline
+            spoofing, avc-log spoofing, kallsyms symbol hiding; userspace ABI
+            (\`ksu_susfs\` / BRENE) bridged over the KernelSU reboot supercall
+          - **NoMount v2.1.0** — \`fs/nomount\` VFS path redirection / virtual file
+            injection with zero mounts (+ upstream post-release evict_inode fix)
+          - Companion modules attached: **BRENE** (SUSFS control panel) and the
+            **NoMount metamodule** — install both from the manager after flashing
 
           ### eBPF (extended Berkeley Packet Filter)
           - \`BPF_SYSCALL=y\` — BPF syscall + arm64 JIT (\`BPF_JIT_ALWAYS_ON\`)
@@ -404,10 +542,15 @@ jobs:
             gh release delete "$TAG" --yes --cleanup-tag
           fi
 
+          ASSETS=(release-assets/Stormbreaker-miatoll-*.zip)
+          for z in release-assets/BRENE-*.zip release-assets/NoMount-*.zip; do
+            [ -f "$z" ] && ASSETS+=("$z")
+          done
+
           gh release create "$TAG" \
             --target "${{ github.sha }}" \
             --title "Stormbreaker Kernel miatoll — build ${{ github.run_number }}" \
             --notes-file release-notes.md \
-            release-assets/Stormbreaker-miatoll-*.zip
+            "${ASSETS[@]}"
 
           gh release view "$TAG" --json url --jq '.url'

@@ -31,6 +31,9 @@
 #include <linux/ima.h>
 #include <linux/dnotify.h>
 #include <linux/compat.h>
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/susfs_def.h>
+#endif
 
 #include "internal.h"
 
@@ -369,6 +372,12 @@ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
 	int res;
 	unsigned int lookup_flags = LOOKUP_FOLLOW;
 
+#ifdef CONFIG_KSU
+	extern int ksu_handle_faccessat(int *, const char __user **, int *,
+					  int *);
+
+	ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
+#endif
 	if (mode & ~S_IRWXO)	/* where's F_OK, X_OK, W_OK, R_OK? */
 		return -EINVAL;
 
@@ -1074,11 +1083,22 @@ struct file *filp_clone_open(struct file *oldfile)
 }
 EXPORT_SYMBOL(filp_clone_open);
 
+#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
+extern struct filename *susfs_open_redirect_spoof_do_sys_openat(struct inode *inode);
+#endif // #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
+
 long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 {
 	struct open_flags op;
 	int fd = build_open_flags(flags, mode, &op);
 	struct filename *tmp;
+
+#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
+	struct filename *fake_filename;
+	struct filename *lookup_filename;
+	struct path lookup_path;
+	int lookup_err;
+#endif // #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
 
 	if (fd)
 		return fd;
@@ -1086,6 +1106,44 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 	tmp = getname(filename);
 	if (IS_ERR(tmp))
 		return PTR_ERR(tmp);
+
+#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
+	/* Resolve only far enough to identify the inode before opening it. The
+	 * previous post-open redirect could truncate, block on, or otherwise
+	 * trigger side effects on the original file before closing it.
+	 */
+	lookup_filename = getname_kernel(tmp->name);
+	if (IS_ERR(lookup_filename)) {
+		lookup_err = PTR_ERR(lookup_filename);
+		putname(tmp);
+		return lookup_err;
+	}
+	lookup_err = filename_lookup(dfd, lookup_filename, op.lookup_flags,
+				     &lookup_path, NULL);
+	if (!lookup_err) {
+		struct inode *inode = d_backing_inode(lookup_path.dentry);
+
+		fake_filename = NULL;
+		if (SUSFS_IS_INODE_OPEN_REDIRECT_WITHOUT_UID_CHECK(inode))
+			fake_filename = susfs_open_redirect_spoof_do_sys_openat(inode);
+		path_put(&lookup_path);
+		if (IS_ERR(fake_filename)) {
+			lookup_err = PTR_ERR(fake_filename);
+			putname(tmp);
+			return lookup_err;
+		}
+		if (fake_filename) {
+			putname(tmp);
+			tmp = fake_filename;
+		}
+	} else if (lookup_err != -ENOENT) {
+		/* Do not fail open and expose the original inode when the safety
+		 * lookup itself failed. ENOENT remains valid for O_CREAT.
+		 */
+		putname(tmp);
+		return lookup_err;
+	}
+#endif // #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
 
 	fd = get_unused_fd_flags(flags);
 	if (fd >= 0) {

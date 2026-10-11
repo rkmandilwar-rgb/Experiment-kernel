@@ -37,6 +37,11 @@
 #include <linux/lockdep.h>
 #include <linux/user_namespace.h>
 #include "internal.h"
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+#include <linux/susfs_def.h>
+extern bool susfs_is_current_ksu_domain(void);
+extern bool susfs_is_sdcard_android_data_decrypted;
+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 
 
 static LIST_HEAD(super_blocks);
@@ -971,6 +976,32 @@ int get_anon_bdev(dev_t *p)
 {
 	int dev;
 	int error;
+
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+	if (!READ_ONCE(susfs_is_sdcard_android_data_decrypted) && susfs_is_current_ksu_domain()) {
+ retry_ksu:
+		if (ida_pre_get(&unnamed_dev_ida, GFP_ATOMIC) == 0)
+			return -ENOMEM;
+		spin_lock(&unnamed_dev_lock);
+		error = ida_get_new_above(&unnamed_dev_ida, DEFAULT_KSU_MNT_MINOR_DEV, &dev);
+		spin_unlock(&unnamed_dev_lock);
+		if (error == -EAGAIN)
+			/* We raced and lost with another CPU. */
+			goto retry_ksu;
+		if (error == -ENOSPC)
+			error = -EMFILE;
+		if (error)
+			return error;
+		if (dev >= (1 << MINORBITS)) {
+			spin_lock(&unnamed_dev_lock);
+			ida_remove(&unnamed_dev_ida, dev);
+			spin_unlock(&unnamed_dev_lock);
+			return -EMFILE;
+		}
+		*p = MKDEV(0, dev & MINORMASK);
+		return 0;
+	}
+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 
  retry:
 	if (ida_pre_get(&unnamed_dev_ida, GFP_ATOMIC) == 0)

@@ -13,17 +13,27 @@
 #include <linux/seq_file.h>
 #include <linux/proc_fs.h>
 #include <linux/exportfs.h>
-
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/susfs_def.h>
+#endif
 #include "inotify/inotify.h"
 #include "../fs/mount.h"
+
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+extern int susfs_get_non_sus_mnt_id_from_mnt(struct mount *orig_mnt);
+#endif
+#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+extern void susfs_show_map_vma_spoofer(struct inode *inode, dev_t *out_dev,
+                                      unsigned long *out_ino);
+#endif
 
 #if defined(CONFIG_PROC_FS)
 
 #if defined(CONFIG_INOTIFY_USER) || defined(CONFIG_FANOTIFY)
 
 static void show_fdinfo(struct seq_file *m, struct file *f,
-			void (*show)(struct seq_file *m,
-				     struct fsnotify_mark *mark))
+                        void (*show)(struct seq_file *m,
+                                     struct fsnotify_mark *mark))
 {
 	struct fsnotify_group *group = f->private_data;
 	struct fsnotify_mark *mark;
@@ -76,20 +86,34 @@ static void inotify_fdinfo(struct seq_file *m, struct fsnotify_mark *mark)
 {
 	struct inotify_inode_mark *inode_mark;
 	struct inode *inode;
+	unsigned long ino;
+	dev_t dev;
+	bool metadata_spoofed = false;
 
 	if (!(mark->connector->flags & FSNOTIFY_OBJ_TYPE_INODE))
 		return;
 
 	inode_mark = container_of(mark, struct inotify_inode_mark, fsn_mark);
 	inode = igrab(mark->connector->inode);
-	if (inode) {
-		seq_printf(m, "inotify wd:%x ino:%lx sdev:%x mask:%x ignored_mask:0 ",
-			   inode_mark->wd, inode->i_ino, inode->i_sb->s_dev,
-			   inotify_mark_user_mask(mark));
+	if (!inode)
+		return;
+
+	ino = inode->i_ino;
+	dev = inode->i_sb->s_dev;
+#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+	/* v2.3.0: SUS_KSTAT is effective for any app-uid process, independent of
+	 * whether the process was umounted.
+	 */
+	if (susfs_is_current_app_uid())
+		susfs_show_map_vma_spoofer(inode, &dev, &ino);
+	metadata_spoofed = ino != inode->i_ino || dev != inode->i_sb->s_dev;
+#endif
+	seq_printf(m, "inotify wd:%x ino:%lx sdev:%x mask:%x ignored_mask:0 ",
+		   inode_mark->wd, ino, dev, inotify_mark_user_mask(mark));
+	if (!metadata_spoofed)
 		show_mark_fhandle(m, inode);
-		seq_putc(m, '\n');
-		iput(inode);
-	}
+	seq_putc(m, '\n');
+	iput(inode);
 }
 
 void inotify_show_fdinfo(struct seq_file *m, struct file *f)
@@ -110,20 +134,37 @@ static void fanotify_fdinfo(struct seq_file *m, struct fsnotify_mark *mark)
 		mflags |= FAN_MARK_IGNORED_SURV_MODIFY;
 
 	if (mark->connector->flags & FSNOTIFY_OBJ_TYPE_INODE) {
+		unsigned long ino;
+		dev_t dev;
+		bool metadata_spoofed = false;
+
 		inode = igrab(mark->connector->inode);
 		if (!inode)
 			return;
+		ino = inode->i_ino;
+		dev = inode->i_sb->s_dev;
+#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+		if (susfs_is_current_app_uid())
+			susfs_show_map_vma_spoofer(inode, &dev, &ino);
+		metadata_spoofed = ino != inode->i_ino || dev != inode->i_sb->s_dev;
+#endif
 		seq_printf(m, "fanotify ino:%lx sdev:%x mflags:%x mask:%x ignored_mask:%x ",
-			   inode->i_ino, inode->i_sb->s_dev,
-			   mflags, mark->mask, mark->ignored_mask);
-		show_mark_fhandle(m, inode);
+			   ino, dev, mflags, mark->mask, mark->ignored_mask);
+		if (!metadata_spoofed)
+			show_mark_fhandle(m, inode);
 		seq_putc(m, '\n');
 		iput(inode);
 	} else if (mark->connector->flags & FSNOTIFY_OBJ_TYPE_VFSMOUNT) {
 		struct mount *mnt = real_mount(mark->connector->mnt);
+		int mnt_id = mnt->mnt_id;
 
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+		if (susfs_is_current_proc_umounted() &&
+		    mnt_id >= DEFAULT_KSU_MNT_ID)
+			mnt_id = susfs_get_non_sus_mnt_id_from_mnt(mnt);
+#endif
 		seq_printf(m, "fanotify mnt_id:%x mflags:%x mask:%x ignored_mask:%x\n",
-			   mnt->mnt_id, mflags, mark->mask, mark->ignored_mask);
+			   mnt_id, mflags, mark->mask, mark->ignored_mask);
 	}
 }
 
