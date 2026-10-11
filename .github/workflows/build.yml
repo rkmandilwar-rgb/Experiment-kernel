@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - arena/7d79595b-experiment-kernel
+      - arena/5767b23a-experiment-kernel
 
 permissions:
   contents: write
