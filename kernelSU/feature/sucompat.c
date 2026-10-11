@@ -5,7 +5,13 @@
 #include <linux/preempt.h>
 #include <linux/printk.h>
 #include <linux/mm.h>
+#include <linux/version.h>
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 2, 0)
 #include <linux/pgtable.h>
+#else
+/* linux/pgtable.h does not exist before 5.2 (4.14 uses asm/pgtable.h). */
+#include <asm/pgtable.h>
+#endif
 #include <linux/uaccess.h>
 #include <asm/current.h>
 #include <linux/cred.h>

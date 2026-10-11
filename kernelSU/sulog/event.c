@@ -2,7 +2,7 @@
 #include <linux/compat.h>
 #include <linux/cred.h>
 #include <linux/gfp.h>
-#include <linux/minmax.h>
+#include <linux/kernel.h> /* min_t(); linux/minmax.h is 5.17+ */
 #include <linux/overflow.h>
 #include <linux/sched/signal.h>
 #include <linux/slab.h>
