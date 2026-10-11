@@ -194,7 +194,11 @@ unsigned int capacity_margin				= 1280;
 
 /* Migration margins */
 unsigned int sysctl_sched_capacity_margin_up[MAX_MARGIN_LEVELS] = {
-			[0 ... MAX_MARGIN_LEVELS-1] = 1078}; /* ~5% margin */
+			/* ~10% margin (was 1078/~5%): promote UI tasks to
+			 * the big cluster sooner — miatoll smooth tuning.
+			 * Runtime knob: /proc/sys/kernel/sched_upmigrate.
+			 */
+			[0 ... MAX_MARGIN_LEVELS-1] = 1127};
 unsigned int sysctl_sched_capacity_margin_down[MAX_MARGIN_LEVELS] = {
 			[0 ... MAX_MARGIN_LEVELS-1] = 1205}; /* ~15% margin */
 unsigned int sched_capacity_margin_up[NR_CPUS] = {

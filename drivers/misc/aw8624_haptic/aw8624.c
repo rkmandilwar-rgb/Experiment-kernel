@@ -4110,8 +4110,12 @@ aw8624_i2c_probe(struct i2c_client *i2c, const struct i2c_device_id *id)
 		return rc;
 	}
 
+	/* Smooth/haptics tuning: run the vibrator workqueue at high
+	 * priority (max_active=1 keeps the old singlethread ordering)
+	 * so vibration onset isn't queued behind normal-priority work.
+	 */
 	aw8624->work_queue =
-	    create_singlethread_workqueue("aw8924_vibrator_work_queue");
+	    alloc_workqueue("aw8924_vibrator_work_queue", WQ_HIGHPRI, 1);
 	if (!aw8624->work_queue) {
 		dev_err(&i2c->dev,
 			"%s: Error creating aw8924_vibrator_work_queue\n",

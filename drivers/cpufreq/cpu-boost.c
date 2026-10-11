@@ -36,7 +36,7 @@ static struct work_struct input_boost_work;
 
 static bool input_boost_enabled = true;
 
-static unsigned int input_boost_ms = 40;
+static unsigned int input_boost_ms = 120;
 module_param(input_boost_ms, uint, 0644);
 
 static unsigned int sched_boost_on_input;
@@ -326,8 +326,12 @@ static int cpu_boost_init(void)
 	for_each_possible_cpu(cpu) {
 		s = &per_cpu(sync_info, cpu);
 		s->cpu = cpu;
-		/* Default input boost: 1.4 GHz on all cores */
-		s->input_boost_freq = 1401600;
+		/* Default input boost (miatoll smooth tuning): little
+		 * cluster (cpu0-5) 1.4 GHz, big cluster (cpu6-7) 1.7 GHz.
+		 * Both are valid OPPs per atoll.dtsi; cpu-boost rounds to
+		 * the nearest OPP anyway.
+		 */
+		s->input_boost_freq = (cpu >= 6) ? 1708800 : 1401600;
 	}
 	cpufreq_register_notifier(&boost_adjust_nb, CPUFREQ_POLICY_NOTIFIER);
 

@@ -3445,7 +3445,7 @@
 
 			qcom,speed-bin = <0>;
 
-			qcom,initial-pwrlevel = <6>;
+			qcom,initial-pwrlevel = <5>; // smooth tuning: GPU boots one level up (was <6>)
 			qcom,ca-target-pwrlevel = <5>;
 
 			/* TURBO_L1 */
@@ -3527,7 +3527,7 @@
 
 			qcom,speed-bin = <174>;
 
-			qcom,initial-pwrlevel = <6>;
+			qcom,initial-pwrlevel = <5>; // smooth tuning: GPU boots one level up (was <6>)
 			qcom,ca-target-pwrlevel = <5>;
 
 			/* TURBO_L1 */

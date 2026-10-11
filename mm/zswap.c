@@ -89,7 +89,11 @@ static struct kernel_param_ops zswap_enabled_param_ops = {
 module_param_cb(enabled, &zswap_enabled_param_ops, &zswap_enabled, 0644);
 
 /* Crypto compressor to use */
-#define ZSWAP_COMPRESSOR_DEFAULT "lzo"
+/* smooth tuning: lz4 instead of lzo — faster compress/decompress on the
+ * swap path (CRYPTO_LZ4 is enabled in the miatoll defconfig). Runtime knob:
+ * /sys/module/zswap/parameters/compressor.
+ */
+#define ZSWAP_COMPRESSOR_DEFAULT "lz4"
 static char *zswap_compressor = ZSWAP_COMPRESSOR_DEFAULT;
 static int zswap_compressor_param_set(const char *,
 				      const struct kernel_param *);

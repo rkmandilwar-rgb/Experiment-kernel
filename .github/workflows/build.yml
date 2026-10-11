@@ -11,6 +11,11 @@
 #     evict_inode fix 7e7342cd4)
 #   - Companion module zips attached to every build: BRENE (SUSFS control
 #     panel) and the NoMount metamodule
+#   - Smooth-tuning pack baked into the kernel (no modules): touch-boost,
+#     schedutil/WALT defaults, GPU boot pwrlevel, KSM/THP/ZSWAP-lz4,
+#     zram page-cluster 0, CFQ default + 256KB read-ahead
+#   - Haptics & sound: AW8624 high-priority vibrator workqueue, ALSA
+#     hrtimer backend, compress offload, USB audio, FF-memless
 name: Build & Release Stormbreaker Kernel
 
 on:
@@ -260,6 +265,58 @@ jobs:
 
           # NoMount v2.1.0
           require 'CONFIG_NOMOUNT=y'
+
+          # Smooth-tuning pack: memory features
+          require 'CONFIG_KSM=y'
+          require 'CONFIG_TRANSPARENT_HUGEPAGE=y'
+          require 'CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y'
+          require 'CONFIG_FRONTSWAP=y'
+          require 'CONFIG_ZSWAP=y'
+          require 'CONFIG_ZPOOL=y'
+          require 'CONFIG_ZBUD=y'
+          require 'CONFIG_IDLE_PAGE_TRACKING=y'
+          require 'CONFIG_PAGE_EXTENSION=y'
+
+          # Smooth-tuning pack: CFQ default for legacy queues
+          # (UFS is blk-mq and auto-falls back to mq-deadline in
+          #  block/elevator.c; BFQ cannot attach to blk-mq on 4.14)
+          require 'CONFIG_IOSCHED_CFQ=y'
+          require 'CONFIG_DEFAULT_CFQ=y'
+          require 'CONFIG_DEFAULT_IOSCHED="cfq"'
+          require 'CONFIG_MQ_IOSCHED_DEADLINE=y'
+
+          # Smooth-tuning pack: baked-in defaults (source contract)
+          grep -q 'input_boost_ms = 120' drivers/cpufreq/cpu-boost.c \
+            || { echo "::error::touch-boost duration default missing"; exit 1; }
+          grep -q '1708800 : 1401600' drivers/cpufreq/cpu-boost.c \
+            || { echo "::error::touch-boost freq defaults missing"; exit 1; }
+          grep -q 'page_cluster = 0' mm/swap.c \
+            || { echo "::error::zram page-cluster default missing"; exit 1; }
+          grep -q '1127' kernel/sched/fair.c \
+            || { echo "::error::WALT capacity-margin default missing"; exit 1; }
+          grep -q 'tunables->up_rate_limit_us = 500' kernel/sched/cpufreq_schedutil.c \
+            || { echo "::error::schedutil up-rate default missing"; exit 1; }
+          grep -qE 'VM_MAX_READAHEAD[[:space:]]+256' include/linux/mm.h \
+            || { echo "::error::256KB read-ahead default missing"; exit 1; }
+          grep -q 'ZSWAP_COMPRESSOR_DEFAULT "lz4"' mm/zswap.c \
+            || { echo "::error::zswap lz4 default missing"; exit 1; }
+          if grep -q 'qcom,initial-pwrlevel = <6>' arch/arm64/boot/dts/qcom/atoll.dtsi; then
+            echo "::error::GPU still boots at lowest power level"
+            exit 1
+          fi
+
+          # Haptics & sound pack
+          require 'CONFIG_SND_HRTIMER=y'
+          require 'CONFIG_SND_PCM_TIMER=y'
+          require 'CONFIG_SND_DYNAMIC_MINORS=y'
+          require 'CONFIG_SND_COMPRESS_OFFLOAD=y'
+          require 'CONFIG_SND_SOC_COMPRESS=y'
+          require 'CONFIG_SND_USB_AUDIO=y'
+          require 'CONFIG_INPUT_FF_MEMLESS=y'
+          require 'CONFIG_AW8624_HAPTIC=y'
+          require 'CONFIG_DRV2624_HAPTIC=y'
+          grep -q 'WQ_HIGHPRI' drivers/misc/aw8624_haptic/aw8624.c \
+            || { echo "::error::AW8624 haptic workqueue not high-priority"; exit 1; }
 
           # ── Source-level version contract ──
           grep -q 'SUSFS_VERSION "v2.3.0"' include/linux/susfs.h \
@@ -519,6 +576,28 @@ jobs:
           - **mac80211 + external USB Wi-Fi:** ath9k_htc, carl9170, rt2x00 (rt2500usb/rt73usb/rt2800usb), mt7601u, rtl8187, rtl8xxxu, zd1211rw
           - **USB serial:** CH341, FTDI, PL2303, CP210X
           - **SDR:** DVB RTL28XXU
+
+          ### Smooth tuning (baked in, no modules)
+          - Touch boost: every input lifts little cores to 1.4 GHz and big
+            cores to 1.7 GHz for 120 ms (driver defaults)
+          - schedutil: instant up-ramp (500 us), slow decay (20 ms)
+          - WALT: capacity margin up 1078 -> 1127 (~5% -> ~10%) — UI tasks
+            reach the 2×A76 cluster sooner
+          - core_ctl keeps >=1 big core awake; dirty ratios 5/20 (already
+            default in this tree)
+          - GPU (Adreno 618): boots one power level higher (initial-pwrlevel
+            6 -> 5 for speed-bins 0/174)
+          - Memory: KSM (auto-run baked in), THP madvise, ZSWAP+lz4 in front
+            of zram, idle-page tracking, zram page-cluster 0
+          - Storage: CFQ default for legacy queues, mq-deadline auto-default
+            for the UFS blk-mq queues, 256 KB read-ahead
+
+          ### Haptics & sound
+          - AW8624 vibrator workqueue runs at high priority — faster buzz
+            onset on taps/notifications (factory dts calibration untouched)
+          - ALSA hrtimer backend enabled (lower-jitter PCM/offload timing)
+          - Compress offload + DSP decode, USB audio, dynamic PCM minors,
+            force-feedback input all built in
 
           ### Security fixes
           - **CVE-2025-39764** — Fixed memory leak in nf_conntrack expectation dumpers (pointer+refcount → cookie)
