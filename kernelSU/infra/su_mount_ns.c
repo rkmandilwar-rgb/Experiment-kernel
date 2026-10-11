@@ -1,3 +1,4 @@
+#include "ksu_compat.h"
 #include <linux/dcache.h>
 #include <linux/errno.h>
 #include <linux/fdtable.h>

@@ -8,6 +8,8 @@
 #include <linux/rculist.h>
 #include <linux/task_work.h>
 #include <linux/version.h>
+#include <linux/string.h>
+#include "ksu_compat.h"
 #include "klog.h" // IWYU pragma: keep
 #include "manager/throne_tracker.h"
 
@@ -69,9 +71,35 @@ static int ksu_handle_inode_event(struct fsnotify_mark *mark, u32 mask,
     return 0;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)
 static const struct fsnotify_ops ksu_ops = {
 	.handle_inode_event = ksu_handle_inode_event,
 };
+#else
+/*
+ * 4.14 fsnotify: the callback is handle_event(). For events on children of a
+ * watched directory, `inode` is the directory and `file_name` the child name.
+ */
+static int ksu_handle_event(struct fsnotify_group *group, struct inode *inode,
+                            struct fsnotify_mark *inode_mark,
+                            struct fsnotify_mark *vfsmount_mark, u32 mask,
+                            const void *data, int data_type,
+                            const unsigned char *file_name, u32 cookie,
+                            struct fsnotify_iter_info *iter_info)
+{
+	struct qstr name;
+
+	if (!file_name)
+		return 0;
+	name.name = file_name;
+	name.len = strlen((const char *)file_name);
+	return ksu_handle_inode_event(inode_mark, mask, inode, NULL, &name, cookie);
+}
+
+static const struct fsnotify_ops ksu_ops = {
+	.handle_event = ksu_handle_event,
+};
+#endif
 
 static int add_mark_on_inode(struct inode *inode, u32 mask,
                              struct fsnotify_mark **out)
@@ -85,7 +113,11 @@ static int add_mark_on_inode(struct inode *inode, u32 mask,
 	fsnotify_init_mark(m, g);
 	m->mask = mask;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)
 	if (fsnotify_add_inode_mark(m, inode, 0)) {
+#else
+	if (fsnotify_add_mark(m, inode, NULL, 0)) {
+#endif
 		fsnotify_put_mark(m);
 		return -EINVAL;
 	}

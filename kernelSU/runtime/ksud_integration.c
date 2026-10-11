@@ -1,3 +1,4 @@
+#include "ksu_compat.h"
 #include "feature/selinux_hide.h"
 #include <linux/rcupdate.h>
 #include <linux/slab.h>

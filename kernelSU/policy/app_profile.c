@@ -64,7 +64,9 @@ void setup_groups(struct root_profile *profile, struct cred *cred)
     put_group_info(group_info);
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
 void seccomp_filter_release(struct task_struct *tsk);
+#endif
 
 // https://cs.android.com/android/_/android/kernel/common/+/5346453405bf12d7ed6003f45dd47b71744fe1be
 // Some 15-6.6 kernel have this backport while others don't have, e.g. Pixel 10
@@ -102,7 +104,9 @@ static void disable_seccomp(void)
 
     current->seccomp.mode = 0;
     current->seccomp.filter = NULL;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
     atomic_set(&current->seccomp.filter_count, 0);
+#endif
     spin_unlock_irq(&current->sighand->siglock);
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
@@ -119,7 +123,12 @@ static void disable_seccomp(void)
     fake->sighand = NULL;
 #endif
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
     seccomp_filter_release(fake);
+#else
+    /* 4.14 has no seccomp_filter_release(); the filter reference is leaked
+     * here (a small, one-off leak per profile change), not freed. */
+#endif
     kfree(fake);
 }
 

@@ -1,3 +1,5 @@
+#include <linux/sched/task.h>
+#include "ksu_compat.h"
 #include <linux/rcupdate.h>
 #include <linux/limits.h>
 #include <linux/rculist.h>

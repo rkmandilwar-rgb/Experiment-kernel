@@ -8,6 +8,10 @@
 #include "klog.h" // IWYU pragma: keep
 #include "infra/seccomp_cache.h"
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
+/* The struct seccomp_filter copy below matches 5.11+ only. Below that the
+ * cache is disabled (no-op) instead of touching mismatched memory. */
+
 struct action_cache {
 	DECLARE_BITMAP(allow_native, SECCOMP_ARCH_NATIVE_NR);
 #ifdef SECCOMP_ARCH_COMPAT
@@ -63,3 +67,15 @@ void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr)
     }
 #endif
 }
+
+#else /* < 5.11: seccomp action cache not available, keep the API as no-ops */
+
+void ksu_seccomp_clear_cache(struct seccomp_filter *filter, int nr)
+{
+}
+
+void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr)
+{
+}
+
+#endif
