@@ -31,7 +31,7 @@ KREL=$(make -s O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
     CROSS_COMPILE=aarch64-linux-gnu- kernelrelease 2>/dev/null || echo "unknown")
 
 # Package
-ZIPFILE="Stormbreaker-miatoll-${TANGGAL}.zip"
+ZIPFILE="Stormbreaker-miatoll-${TANGGAL}-build${RUN_NUM}.zip"
 (
   cd "$AK3"
   zip -r9 "../artifacts/${ZIPFILE}" . \
