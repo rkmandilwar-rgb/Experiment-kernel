@@ -13,6 +13,19 @@
 #include "asm/cacheflush.h"
 #include "asm-generic/fixmap.h"
 
+// Helpers that only exist on newer kernels. 4.14 has pte_pfn() but not
+// __pte_to_phys(); copy_to_kernel_nofault() arrived in 5.8 (probe_kernel_write
+// is the 4.14 equivalent); 4.14 exports flush_icache_range, not the private
+// __flush_icache_range.
+#ifndef __pte_to_phys
+#define __pte_to_phys(pte) (pte_pfn(pte) << PAGE_SHIFT)
+#endif
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
+#define ksu_copy_to_kernel_nofault(dst, src, len) copy_to_kernel_nofault(dst, src, len)
+#else
+#define ksu_copy_to_kernel_nofault(dst, src, len) probe_kernel_write(dst, src, len)
+#endif
+
 // https://github.com/fuqiuluo/ovo/blob/f7da411458e87d32438dc14fce5a3313ed0c967e/ovo/mmuhack.c#L21
 
 // Translate a kernel virtual address to a physical address by walking the
@@ -102,7 +115,7 @@ fail:
 #define ksu_flush_icache(start, end) caches_clean_inval_pou(start, end)
 #else
 #define ksu_flush_dcache(start, sz) __flush_dcache_area((void *)start, sz)
-#define ksu_flush_icache(start, end) __flush_icache_range(start, end)
+#define ksu_flush_icache(start, end) flush_icache_range(start, end)
 #endif
 
 struct patch_text_info {
@@ -151,7 +164,7 @@ static int ksu_patch_text_nosync(void *dst, void *src, size_t len, int flags)
     void *map = set_fixmap_offset(FIX_TEXT_POKE0, phy);
     pr_debug("fixmap addr for patch 0x%lx: 0x%lx\n", p, (unsigned long)map);
 
-    ret = (int)copy_to_kernel_nofault(map, src, len);
+    ret = (int)ksu_copy_to_kernel_nofault(map, src, len);
 
     clear_fixmap(FIX_TEXT_POKE0);
 
