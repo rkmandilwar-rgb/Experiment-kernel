@@ -318,6 +318,17 @@ jobs:
           grep -q 'WQ_HIGHPRI' drivers/misc/aw8624_haptic/aw8624.c \
             || { echo "::error::AW8624 haptic workqueue not high-priority"; exit 1; }
 
+          # Boot compatibility: every initramfs compression format this
+          # 4.14 tree supports must be decodable (RD_ZSTD doesn't exist
+          # before 4.19; gzip/bzip2/lzma were already on)
+          require 'CONFIG_BLK_DEV_INITRD=y'
+          require 'CONFIG_RD_GZIP=y'
+          require 'CONFIG_RD_BZIP2=y'
+          require 'CONFIG_RD_LZMA=y'
+          require 'CONFIG_RD_XZ=y'
+          require 'CONFIG_RD_LZO=y'
+          require 'CONFIG_RD_LZ4=y'
+
           # ── Source-level version contract ──
           grep -q 'SUSFS_VERSION "v2.3.0"' include/linux/susfs.h \
             || { echo "::error::SUSFS is not v2.3.0"; exit 1; }
