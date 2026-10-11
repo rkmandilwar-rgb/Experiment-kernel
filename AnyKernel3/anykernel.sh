@@ -45,20 +45,3 @@ PATCH_VBMETA_FLAG=auto;
 dump_boot;
 write_boot; # this also flashes vendor_dlkm, system_dlkm and dtbo if present
 ## end boot install
-
-
-## dtbo files attributes
-# (nothing special needed)
-
-# dtbo shell variables
-BLOCK=dtbo;
-IS_SLOT_DEVICE=0;
-RAMDISK_COMPRESSION=auto;
-PATCH_VBMETA_FLAG=auto;
-
-# reset for dtbo patching
-reset_ak;
-
-# dtbo install
-flash_generic dtbo;
-## end dtbo install
