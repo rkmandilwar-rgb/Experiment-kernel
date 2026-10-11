@@ -6,6 +6,10 @@
  */
 
 #include <linux/export.h>
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/susfs.h>
+#include <linux/susfs_def.h>
+#endif
 #include <linux/mm.h>
 #include <linux/utsname.h>
 #include <linux/mman.h>
@@ -2368,6 +2372,157 @@ int __weak arch_prctl_spec_ctrl_set(struct task_struct *t, unsigned long which,
 SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 		unsigned long, arg4, unsigned long, arg5)
 {
+#if defined(CONFIG_KSU) && defined(CONFIG_KSU_SUSFS)
+	/*
+	 * SUSFS userspace binary (ksu_susfs / susfs) communicates via
+	 * prctl(KERNEL_SU_OPTION=0xDEADBEEF, CMD, data_ptr, NULL, &error).
+	 * Handle SUSFS commands before the regular prctl switch.
+	 */
+	extern int ksu_handle_sys_reboot(int, int, unsigned int, void __user **);
+	if (option == 0xDEADBEEF && current_uid().val == 0) {
+		int __user *err_ptr = (int __user *)arg5;
+		int susfs_err = 0;
+		void __user *data_ptr = (void __user *)arg3;
+		void __user **wrapped = &data_ptr;
+
+		switch (arg2) {
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+		case 0x55550: /* CMD_SUSFS_ADD_SUS_PATH */
+			susfs_add_sus_path(wrapped);
+			break;
+		case 0x55553: /* CMD_SUSFS_ADD_SUS_PATH_LOOP */
+			susfs_add_sus_path_loop(wrapped);
+			break;
+#endif
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+		case 0x55561: /* CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS */
+			susfs_set_hide_sus_mnts_for_non_su_procs(wrapped);
+			break;
+#endif
+#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+		case 0x55570: /* CMD_SUSFS_ADD_SUS_KSTAT */
+		case 0x55572: /* CMD_SUSFS_ADD_SUS_KSTAT_STATICALLY */
+			susfs_add_sus_kstat(wrapped);
+			break;
+		case 0x55571: /* CMD_SUSFS_UPDATE_SUS_KSTAT */
+			susfs_update_sus_kstat(wrapped);
+			break;
+#endif
+#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
+		case 0x55580: /* CMD_SUSFS_ADD_TRY_UMOUNT */
+			susfs_add_try_umount(wrapped);
+			break;
+#endif
+#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
+		case 0x55590: /* CMD_SUSFS_SET_UNAME */
+			susfs_set_uname(wrapped);
+			break;
+#endif
+#ifdef CONFIG_KSU_SUSFS_ENABLE_LOG
+		case 0x555a0: /* CMD_SUSFS_ENABLE_LOG */
+			susfs_enable_log(wrapped);
+			break;
+#endif
+#ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+		case 0x555b0: /* CMD_SUSFS_SET_CMDLINE_OR_BOOTCONFIG */
+			susfs_set_cmdline_or_bootconfig(wrapped);
+			break;
+#endif
+#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
+		case 0x555c0: /* CMD_SUSFS_ADD_OPEN_REDIRECT */
+			susfs_add_open_redirect(wrapped);
+			break;
+#endif
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+		case 0x60020: /* CMD_SUSFS_ADD_SUS_MAP */
+			susfs_add_sus_map(wrapped);
+			break;
+#endif
+		case 0x60010: /* CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING */
+			susfs_set_avc_log_spoofing(wrapped);
+			break;
+		case 0x555e1: { /* CMD_SUSFS_SHOW_VERSION */
+			const char *ver = "v2.3.0";
+			int len = strlen(ver);
+			if (copy_to_user((void __user *)arg3, ver, len + 1))
+				susfs_err = -EFAULT;
+			break;
+		}
+		case 0x555e3: { /* CMD_SUSFS_SHOW_VARIANT */
+			const char *var = "NON-GKI";
+			int len = strlen(var);
+			if (copy_to_user((void __user *)arg3, var, len + 1))
+				susfs_err = -EFAULT;
+			break;
+		}
+		case 0x555e2: { /* CMD_SUSFS_SHOW_ENABLED_FEATURES */
+			unsigned long features = 0;
+			int bit = 0;
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+			features |= (1 << bit); bit++;
+#endif
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+			features |= (1 << bit); bit++;
+#endif
+#ifdef CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
+			features |= (1 << bit); bit++;
+#endif
+#ifdef CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
+			features |= (1 << bit); bit++;
+#endif
+#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+			features |= (1 << bit); bit++;
+#endif
+#ifdef CONFIG_KSU_SUSFS_SUS_OVERLAYFS
+			features |= (1 << bit); bit++;
+#endif
+#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
+			features |= (1 << bit); bit++;
+#endif
+#ifdef CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT
+			features |= (1 << bit); bit++;
+#endif
+#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
+			features |= (1 << bit); bit++;
+#endif
+#ifdef CONFIG_KSU_SUSFS_ENABLE_LOG
+			features |= (1 << bit); bit++;
+#endif
+#ifdef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+			features |= (1 << bit); bit++;
+#endif
+#ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+			features |= (1 << bit); bit++;
+#endif
+#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
+			features |= (1 << bit); bit++;
+#endif
+#ifdef CONFIG_KSU_SUSFS_SUS_SU
+			features |= (1 << bit); bit++;
+#endif
+#ifdef CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT
+			features |= (1 << bit); bit++;
+#endif
+#ifdef CONFIG_KSU_SUSFS_SUS_MEMFD
+			features |= (1 << bit); bit++;
+#endif
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+			features |= (1 << bit); bit++;
+#endif
+			if (copy_to_user((void __user *)arg3, &features, sizeof(features)))
+				susfs_err = -EFAULT;
+			break;
+		}
+		default:
+			susfs_err = -ENOSYS;
+			break;
+		}
+		if (err_ptr)
+			copy_to_user(err_ptr, &susfs_err, sizeof(susfs_err));
+		return 0;
+	}
+#endif /* CONFIG_KSU && CONFIG_KSU_SUSFS */
+
 	struct task_struct *me = current;
 	unsigned char comm[sizeof(me->comm)];
 	long error;
