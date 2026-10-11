@@ -4,7 +4,9 @@
 
 #if defined(__x86_64__)
 typedef sys_call_ptr_t syscall_fn_t;
-#elif defined(__riscv)
+#elif defined(__riscv) || defined(__aarch64__)
+// arm64 (and riscv) syscalls take a single pt_regs pointer. 4.14's
+// asm/syscall.h does not provide this typedef, so define it here.
 typedef long (*syscall_fn_t)(const struct pt_regs *);
 #endif
 
