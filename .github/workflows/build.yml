@@ -31,6 +31,10 @@ on:
           - ubuntu-latest-16-cores
           - ubuntu-latest-32-cores
           - ubuntu-latest-64-cores
+      publish_release:
+        description: 'Publish the completed build with only the kernel ZIP and matching KernelSU Manager APK'
+        type: boolean
+        default: false
   push:
     branches:
       - arena/7e8eb3ac-experiment-kernel
@@ -495,152 +499,106 @@ jobs:
   release:
     name: Publish release
     needs: build
-    if: false  # disabled for testing — re-enable when ready to release
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release == true }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
 
     steps:
-      - name: Checkout kernel source
-        uses: actions/checkout@v4
-
       - name: Download build artifact
         uses: actions/download-artifact@v4
         with:
           name: miatoll-kernel-${{ github.run_number }}
           path: release-assets
 
-      - name: Create GitHub release
+      - name: Stage only the kernel ZIP and matching KernelSU Manager
+        id: assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="stormbreaker-${{ github.run_number }}"
+          mkdir -p release-payload
 
-          KREL=$(grep kernel.release release-assets/build-info.txt \
-                 | cut -d= -f2 || echo "unknown")
+          mapfile -d '' kernel_zips < <(
+            find release-assets -maxdepth 1 -type f \
+              -name "Stormbreaker-miatoll-*-build${GITHUB_RUN_NUMBER}.zip" -print0
+          )
+          if [ "${#kernel_zips[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one flashable kernel ZIP for build ${GITHUB_RUN_NUMBER}; found ${#kernel_zips[@]}"
+            find release-assets -maxdepth 2 -type f -print || true
+            exit 1
+          fi
+          kernel_zip=$(basename "${kernel_zips[0]}")
+          cp "${kernel_zips[0]}" "release-payload/${kernel_zip}"
 
-          cat > release-notes.md << EOF
-          # Stormbreaker Kernel — miatoll
+          # Match the in-kernel KernelSU v3.3.0+72 driver (version 32673).
+          manager_apk='KernelSU_v3.3.0+72_32673-release.apk'
+          gh release download 'v3.3.0+72' \
+            --repo backslashxx/KernelSU \
+            --pattern "$manager_apk" \
+            --dir release-payload
 
-          **Kernel:** \`${KREL}\`
-          **Device:** Xiaomi Miatoll (Curtana / Gram / Joyeuse / Excalibur)
-          **SoC:** SM6250 (Atoll) — non-GKI kernel v4.14
-          **Toolchain:** LLVM/Clang \`${LLVM_VERSION}\` (apt.llvm.org, zero GCC for aarch64)
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import is_zipfile
 
-          ---
+          assets = sorted(p for p in Path("release-payload").iterdir() if p.is_file())
+          if len(assets) != 2:
+              raise SystemExit(f"Expected only two release assets, found: {[p.name for p in assets]}")
+          if not any(p.name.startswith("Stormbreaker-miatoll-") and p.name.endswith(".zip") for p in assets):
+              raise SystemExit("Flashable Stormbreaker kernel ZIP is missing")
+          if not any(p.name == "KernelSU_v3.3.0+72_32673-release.apk" for p in assets):
+              raise SystemExit("Matching KernelSU Manager APK is missing")
+          for asset in assets:
+              if not is_zipfile(asset):
+                  raise SystemExit(f"Invalid ZIP/APK asset: {asset.name}")
+              print(f"release asset: {asset.name} ({asset.stat().st_size:,} bytes)")
+          PY
 
-          ## ✨ Features
+          echo "kernel_zip=${kernel_zip}" >> "$GITHUB_OUTPUT"
+          echo "manager_apk=${manager_apk}" >> "$GITHUB_OUTPUT"
+          sha256sum release-payload/*
 
-          ### Root & hiding stack
-          - **KernelSU** — backslashxx fork \`v3.3.0+72\` (driver 32673), in-tree at
-            \`drivers/kernelsu\`, manual hooks (issue #5 rev v2.3) + LSM security hooks;
-            kprobe / syscall-table / branch-link hooking disabled
-          - **SUSFS v2.3.0** — non-GKI 4.14 semantic port (\`fs/susfs.c\`):
-            sus_path, sus_mount, sus_kstat, sus_map, open_redirect, uname/cmdline
-            spoofing, avc-log spoofing, kallsyms symbol hiding; userspace ABI
-            (\`ksu_susfs\` / BRENE) bridged over the KernelSU reboot supercall
-          - **NoMount v2.1.0** — \`fs/nomount\` VFS path redirection / virtual file
-            injection with zero mounts (+ upstream post-release evict_inode fix)
-          - Companion modules attached: **BRENE** (SUSFS control panel) and the
-            **NoMount metamodule** — install both from the manager after flashing
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KERNEL_ZIP: ${{ steps.assets.outputs.kernel_zip }}
+          MANAGER_APK: ${{ steps.assets.outputs.manager_apk }}
+        run: |
+          set -euo pipefail
+          TAG="stormbreaker-${GITHUB_RUN_NUMBER}"
 
-          ### eBPF (extended Berkeley Packet Filter)
-          - \`BPF_SYSCALL=y\` — BPF syscall + arm64 JIT (\`BPF_JIT_ALWAYS_ON\`)
-          - cgroup-bpf, kprobe / uprobe / tracepoint attach types
-          - cls_bpf, act_bpf, lwtunnel BPF, \`NETFILTER_XT_MATCH_BPF\`
-          - BPF stream parser (sockmap / sk_msg), BPF events
-
-          ### NTFS support
-          - **Legacy NTFS** (\`NTFS_FS=y\`, \`NTFS_RW=y\`) — read + partial write
-          - **Paragon NTFS3** read-write driver (\`fs/ntfs3/\`, backported to 4.14)
-            - Normal / sparse / compressed files, journal replaying
-            - POSIX ACLs, LZX / XPRESS decompression
-            - Coexists with legacy driver: \`mount -t ntfs3\`
-
-          ### EROFS (Enhanced Read-Only File System)
-          - \`EROFS_FS=y\` with LZ4 compression
-          - Extended attributes, POSIX ACL, security labels
-          - Mounts system / vendor EROFS partitions natively
-
-          ### BBRv1 congestion control
-          - BBR v1 as default TCP congestion control (\`DEFAULT_TCP_CONG="bbr"\`)
-          - fq pacing qdisc (\`NET_SCH_FQ=y\`) — mandatory for BBR
-          - CUBIC and RENO still compiled in; BBR is the new default
-
-          ### Droidspaces (Linux containers on Android)
-          - Full namespace isolation: PID, UTS, IPC, NET, USER
-          - cgroup controllers: device, sched, freezer, net_prio, cpuacct, pids, CFS bandwidth, memory
-          - seccomp + seccomp filter
-          - devtmpfs + auto-mount, overlayfs (volatile mode)
-          - Full netfilter stack: conntrack, NAT, nftables, bridge netfilter, VETH
-          - IPv6 NAT (NAT66), UFW / fail2ban firewall inside containers
-          - Docker-in-container: HUGETLBFS, CHECKPOINT_RESTORE, MACVLAN, VXLAN, INET_DIAG, vsock
-          - Cgroup NOPREFIX symlink fix for Droidspaces / LXC compatibility
-
-          ### Kali NetHunter support
-          - **USB Gadget (configfs):** HID (BadUSB), CDC ACM, ECM, NCM, RNDIS, Mass Storage, EEM
-          - **USB traffic monitoring:** \`USB_MON=y\`
-          - **CAN bus:** vcan, slcan, all USB CAN adaptors (EMS, ESD, GS, Kvaser, PEAK, 8DEV, MCBA)
-          - **Bluetooth Arsenal:** RFCOMM TTY, BNEP, HIDP, hcibtusb
-          - **NFS server + client:** v2 / v3 / v4
-          - **mac80211 + external USB Wi-Fi:** ath9k_htc, carl9170, rt2x00 (rt2500usb/rt73usb/rt2800usb), mt7601u, rtl8187, rtl8xxxu, zd1211rw
-          - **USB serial:** CH341, FTDI, PL2303, CP210X
-          - **SDR:** DVB RTL28XXU
-
-          ### Smooth tuning (baked in, no modules)
-          - Touch boost: every input lifts little cores to 1.4 GHz and big
-            cores to 1.7 GHz for 120 ms (driver defaults)
-          - schedutil: instant up-ramp (500 us), slow decay (20 ms)
-          - WALT: capacity margin up 1078 -> 1127 (~5% -> ~10%) — UI tasks
-            reach the 2×A76 cluster sooner
-          - core_ctl keeps >=1 big core awake; dirty ratios 5/20 (already
-            default in this tree)
-          - GPU (Adreno 618): boots one power level higher (initial-pwrlevel
-            6 -> 5 for speed-bins 0/174)
-          - Memory: KSM (auto-run baked in), THP madvise, ZSWAP+lz4 in front
-            of zram, idle-page tracking, zram page-cluster 0
-          - Storage: CFQ default for legacy queues, mq-deadline auto-default
-            for the UFS blk-mq queues, 256 KB read-ahead
-
-          ### Haptics & sound
-          - AW8624 vibrator workqueue runs at high priority — faster buzz
-            onset on taps/notifications (factory dts calibration untouched)
-          - ALSA hrtimer backend enabled (lower-jitter PCM/offload timing)
-          - Compress offload + DSP decode, USB audio, dynamic PCM minors,
-            force-feedback input all built in
-
-          ### Security fixes
-          - **CVE-2025-39764** — Fixed memory leak in nf_conntrack expectation dumpers (pointer+refcount → cookie)
-          - **Cgroup NOPREFIX** — symlink fix with proper IS_ERR() error handling
-
-          ---
-
-          ## 📦 Flashing
-
-          \`\`\`
-          # TWRP / custom recovery:
-          # 1. Flash the .zip
-          # 2. Reboot
-          # 3. Verify Droidspaces: su -c droidspaces check
-          \`\`\`
-
-          **Contents:** \`Image.gz\` + \`dtbo.img\` (all four miatoll variants)
-          EOF
-
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release delete "$TAG" --yes --cleanup-tag
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists; refusing to replace it"
+            exit 1
           fi
 
-          ASSETS=(release-assets/Stormbreaker-miatoll-*.zip)
-          for z in release-assets/BRENE-*.zip release-assets/NoMount-*.zip; do
-            [ -f "$z" ] && ASSETS+=("$z")
-          done
+          cat > release-notes.md << EOF
+          # Stormbreaker Kernel — Xiaomi Miatoll
+
+          Build: ${GITHUB_RUN_NUMBER}
+          Source commit: ${GITHUB_SHA}
+          Kernel: 4.14.357-openela
+          KernelSU driver: backslashxx v3.3.0+72 (32673)
+          Device variants: Curtana / Gram / Joyeuse / Excalibur
+
+          ## Downloads
+
+          - ${KERNEL_ZIP} — flashable custom kernel ZIP; install from a compatible custom recovery.
+          - ${MANAGER_APK} — matching KernelSU Manager app.
+
+          This release contains only these two uploaded assets. Companion modules, raw images, and checksum files are not attached.
+          EOF
 
           gh release create "$TAG" \
-            --target "${{ github.sha }}" \
-            --title "Stormbreaker Kernel miatoll — build ${{ github.run_number }}" \
+            "release-payload/${KERNEL_ZIP}" \
+            "release-payload/${MANAGER_APK}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Stormbreaker Kernel miatoll — build ${GITHUB_RUN_NUMBER}" \
             --notes-file release-notes.md \
-            "${ASSETS[@]}"
+            --latest
 
-          gh release view "$TAG" --json url --jq '.url'
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json url,tagName,assets \
+            --jq '{url, tagName, assets: [.assets[].name]}'
