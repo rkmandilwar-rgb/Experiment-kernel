@@ -1,0 +1,148 @@
+name: Publish selected miatoll kernel build
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: Successful Stormbreaker build run ID whose kernel ZIP should be released
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  release:
+    name: Publish kernel ZIP and matching KernelSU Manager
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Validate successful build run
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]] || {
+            echo "::error::Build run ID must contain digits only"
+            exit 1
+          }
+
+          gh api "repos/${REPOSITORY}/actions/runs/${BUILD_RUN_ID}" > build-run.json
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          with open("build-run.json", encoding="utf-8") as f:
+              run = json.load(f)
+
+          expected = {
+              "name": "Build & Release Stormbreaker Kernel",
+              "head_branch": "arena/7e8eb3ac-experiment-kernel",
+              "status": "completed",
+              "conclusion": "success",
+          }
+          for key, value in expected.items():
+              if run.get(key) != value:
+                  sys.exit(f"::error::Selected run has {key}={run.get(key)!r}; expected {value!r}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"run_number={run['run_number']}\n")
+              out.write(f"head_sha={run['head_sha']}\n")
+          print(f"Validated successful build #{run['run_number']} at {run['head_sha']}")
+          PY
+
+      - name: Download the selected build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: miatoll-kernel-${{ steps.source.outputs.run_number }}
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.build_run_id }}
+          path: source-artifact
+
+      - name: Assemble only the two requested release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_NUMBER: ${{ steps.source.outputs.run_number }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+
+          mapfile -d '' kernel_zips < <(
+            find source-artifact -type f \
+              -name "Stormbreaker-miatoll-*-build${RUN_NUMBER}.zip" -print0
+          )
+          if [ "${#kernel_zips[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one flashable kernel ZIP for build ${RUN_NUMBER}; found ${#kernel_zips[@]}"
+            find source-artifact -type f -maxdepth 4 -print || true
+            exit 1
+          fi
+          kernel_zip=$(basename "${kernel_zips[0]}")
+          cp "${kernel_zips[0]}" "release-assets/${kernel_zip}"
+
+          # Match the in-kernel KernelSU driver version: v3.3.0+72 / 32673.
+          manager_apk='KernelSU_v3.3.0+72_32673-release.apk'
+          gh release download 'v3.3.0+72' \
+            --repo backslashxx/KernelSU \
+            --pattern "$manager_apk" \
+            --dir release-assets
+
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import is_zipfile
+
+          assets = sorted(p for p in Path("release-assets").iterdir() if p.is_file())
+          if len(assets) != 2:
+              raise SystemExit(f"Expected only two release assets, found: {[p.name for p in assets]}")
+          for asset in assets:
+              if not is_zipfile(asset):
+                  raise SystemExit(f"Asset is not a valid ZIP/APK archive: {asset.name}")
+              print(f"asset: {asset.name} ({asset.stat().st_size:,} bytes)")
+          PY
+
+          sha256sum release-assets/*
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_NUMBER: ${{ steps.source.outputs.run_number }}
+          BUILD_SHA: ${{ steps.source.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          TAG="stormbreaker-${RUN_NUMBER}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists; refusing to replace it"
+            exit 1
+          fi
+
+          kernel_zip=$(find release-assets -maxdepth 1 -type f \
+            -name "Stormbreaker-miatoll-*-build${RUN_NUMBER}.zip" -printf '%f\n')
+          manager_apk='KernelSU_v3.3.0+72_32673-release.apk'
+          cat > release-notes.md << EOF
+          # Stormbreaker Kernel — Xiaomi Miatoll
+
+          **Build:** ${RUN_NUMBER}  
+          **Source commit:** ${BUILD_SHA}  
+          **KernelSU:** backslashxx v3.3.0+72 (matching manager APK included)  
+          **Device:** Xiaomi Miatoll — Curtana / Gram / Joyeuse / Excalibur
+
+          ## Files
+
+          - \`${kernel_zip}\` — flashable custom kernel ZIP; flash from a compatible custom recovery.
+          - \`${manager_apk}\` — matching KernelSU Manager app.
+
+          This release intentionally contains only these two uploaded assets. The companion modules, raw images, and checksum file are not attached.
+          EOF
+
+          gh release create "$TAG" \
+            "release-assets/${kernel_zip}" \
+            "release-assets/${manager_apk}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$BUILD_SHA" \
+            --title "Stormbreaker Kernel miatoll — build ${RUN_NUMBER}" \
+            --notes-file release-notes.md \
+            --latest
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,tagName,assets
