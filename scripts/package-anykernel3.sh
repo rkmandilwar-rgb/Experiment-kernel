@@ -17,7 +17,8 @@ rsync -a --exclude='.gitignore' --exclude='placeholder' AnyKernel3/ "$AK3/"
 # Build products
 cp out/arch/arm64/boot/Image.gz  "$AK3/"
 cp out/arch/arm64/boot/dtbo.img  "$AK3/"
-cp out/arch/arm64/boot/dtb.img   "$AK3/" 2>/dev/null || true
+# DTB — AnyKernel3 expects a file named "dtb" (no extension)
+cp out/arch/arm64/boot/dts/qcom/cust-atoll-ab.dtb "$AK3/dtb" 2>/dev/null || true
 
 # Kernel modules (if any =m were built)
 find out/ -name "*.ko" -exec cp {} "$AK3/modules/system/lib/modules/" \; 2>/dev/null || true
@@ -40,7 +41,7 @@ ZIPFILE="Stormbreaker-miatoll-${TANGGAL}.zip"
 # Raw images + metadata
 cp out/arch/arm64/boot/Image.gz  artifacts/
 cp out/arch/arm64/boot/dtbo.img  artifacts/
-cp out/arch/arm64/boot/dtb.img   artifacts/ 2>/dev/null || true
+cp out/arch/arm64/boot/dts/qcom/cust-atoll-ab.dtb artifacts/dtb 2>/dev/null || true
 
 # SHA256
 (

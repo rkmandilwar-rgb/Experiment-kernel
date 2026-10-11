@@ -250,10 +250,12 @@ jobs:
           }
           check_file out/arch/arm64/boot/Image.gz
           check_file out/arch/arm64/boot/dtbo.img
+          check_file out/arch/arm64/boot/dts/qcom/cust-atoll-ab.dtb
 
           echo "::group::SHA256"
           sha256sum out/arch/arm64/boot/Image.gz
           sha256sum out/arch/arm64/boot/dtbo.img
+          sha256sum out/arch/arm64/boot/dts/qcom/cust-atoll-ab.dtb
           echo "::endgroup::"
 
           make -s O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
