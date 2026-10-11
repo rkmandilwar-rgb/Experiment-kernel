@@ -49,6 +49,9 @@ jobs:
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi
 
+          # ── Remove system clang to avoid conflicts with LLVM 22 ──
+          sudo apt-get remove -y clang clang-18 lld lld-18 2>/dev/null || true
+
           # ── Create unversioned symlinks so the Makefile finds clang, ld.lld, etc. ──
           sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-${LLVM_VERSION} 100
           sudo update-alternatives --install /usr/bin/ld.lld ld.lld /usr/bin/ld.lld-${LLVM_VERSION} 100
@@ -206,7 +209,7 @@ jobs:
           set +e
           make -j"$(nproc)" O=out ARCH=arm64 \
             LLVM=1 LLVM_IAS=1 \
-            CC='ccache clang' \
+            CC='ccache clang-22' HOSTCC='ccache clang-22' \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             KCFLAGS="-Wno-error" \
