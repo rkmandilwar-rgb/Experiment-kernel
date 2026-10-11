@@ -74,7 +74,7 @@ jobs:
         run: |
           make -k -j"$(nproc)" O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
             CROSS_COMPILE=aarch64-linux-gnu- \
-            drivers/kernelsu/ > ksu.log 2>&1 || true
+            security/selinux/ drivers/kernelsu/ > ksu.log 2>&1 || true
           echo "errors: $(grep -cE ' (fatal )?error:' ksu.log || true)"
 
       - name: Publish every error
