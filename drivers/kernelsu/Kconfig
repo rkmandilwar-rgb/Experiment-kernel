@@ -131,6 +131,7 @@ config KSU_HEURISTIC_IN_TREE_BUILD
 	depends on KSU
 	default y
 
+
 menu "KernelSU - SUSFS"
 	depends on KSU
 

@@ -3,14 +3,12 @@
 This directory vendors the kernel component from:
 
 - Repository: https://github.com/backslashxx/KernelSU
-- Tag: `v3.3.0+72` (upstream kernel Makefile: KSU_VERSION 32673)
-- Imported from the upstream `kernel/` directory verbatim, plus the local
-  SUSFS glue blocks listed below.
-- Manager policy: upstream stock. The tree accepts exactly the managers the
-  upstream `v3.3.0+72` release accepts (backslashxx release manager on the
-  public dummy.keystore cert, package `me.weishu.kernelsu`, and self-built
-  managers on the official KernelSU cert). `manager/apk_sign.c` and
-  `manager/throne_tracker.c` are pristine upstream.
+- Release/tag: `v3.3.0-79` (kernel driver `KSU_VERSION=32676`)
+- Matching Manager release asset: `KernelSU_v3.3.0-79_32680-release.apk`
+- The upstream `kernel/` subtree is imported, with only the local SUSFS v2.3.0
+  glue documented below reapplied.
+- The driver exposes KernelSU UAPI v5, which the matching Manager requires.
+  Upstream notes that existing app profiles may reset during this update.
 
 It is integrated in-tree for the Linux 4.14 non-GKI Miatoll kernel
 (curtana / gram / joyeuse / excalibur, 4.14.357-openela base).
@@ -30,9 +28,8 @@ It is integrated in-tree for the Linux 4.14 non-GKI Miatoll kernel
 ## Local SUSFS v2.3.0 glue (not present upstream)
 
 Upstream backslashxx/KernelSU ships no SUSFS support. The following local
-blocks bridge SUSFS v2.3.0 (see `fs/SUSFS_UPSTREAM.md`) into the driver;
-they were carried over from the hardware-validated Stormbreaker/CustomKernel1
-4.14 integration and re-applied on the `v3.3.0+72` sync:
+blocks bridge SUSFS v2.3.0 (see `fs/SUSFS_UPSTREAM.md`) into the driver; they
+are retained across the `v3.3.0-79` refresh:
 
 - `Kconfig` — the "KernelSU - SUSFS" menu (`KSU_SUSFS` + feature toggles;
   `KSU_SUSFS` depends on `FUSE_FS` because `fs/susfs.c` uses fuse internals).
@@ -44,23 +41,21 @@ they were carried over from the hardware-validated Stormbreaker/CustomKernel1
   before the kernel-umount work, then `schedule_work(&susfs_extra_works)`
   to re-apply looped sus-path marks after the umount work completes.
 - `selinux/selinux.c` — `susfs_is_current_ksu_domain()` (== `is_ksu_domain()`).
-- `supercall/supercall.c` — the SUSFS command block in `ksu_handle_sys_reboot()`:
-  `magic2 == SUSFS_MAGIC` (0xFAFAFAFA) + root caller dispatches the
-  `CMD_SUSFS_*` (0x555xx/0x600xx) v2.3.0 userspace ABI. This is the channel
-  the `ksu_susfs` tool (and therefore the BRENE module) uses on this fork,
-  since the fork has no `prctl(KERNEL_SU_OPTION)` hook.
-- `supercall/dispatch.c` — atomic `EVENT_POST_FS_DATA` one-shot
-  (`atomic_cmpxchg`), `susfs_start_sdcard_monitor_fn()` on that one-shot,
-  and `ksu_module_mounted = true` on `EVENT_MODULE_MOUNTED`.
+- `supercall/supercall.c` — the SUSFS command block in
+  `ksu_handle_sys_reboot()`: `magic2 == SUSFS_MAGIC` (0xFAFAFAFA) + root
+  caller dispatches the `CMD_SUSFS_*` (0x555xx/0x600xx) v2.3.0 userspace ABI.
+  This is the channel the `ksu_susfs` tool (and therefore BRENE) uses on this
+  fork, since the fork has no `prctl(KERNEL_SU_OPTION)` hook.
+- `supercall/dispatch.c` — atomic `EVENT_POST_FS_DATA` one-shot guard,
+  `susfs_start_sdcard_monitor_fn()` on that one-shot, and
+  `ksu_module_mounted = true` on `EVENT_MODULE_MOUNTED`.
 
 ## Sync history
 
-- 2026-10-11: vendored `v3.3.0+72` pristine and re-applied the six local
-  SUSFS glue blocks on top (port of the validated glue that rode on the
-  `v3.3.0-60`-era tree; upstream `ksu_handle_execveat()` /
-  `ksu_handle_sys_reboot()` / `ksu_handle_setresuid_cred()` /
-  `ksu_module_mounted` / `is_appuid` / `is_isolated_process` /
-  `WEBVIEW_ZYGOTE_UID` anchors are unchanged between the two tags).
-  Local manager-policy trims from the previous lineage (KOWX712 removal,
-  two-manager crowning) were intentionally NOT carried over — upstream
-  stock manager acceptance is used.
+- 2026-10-12: refreshed the vendored driver to backslashxx/KernelSU
+  `v3.3.0-79` (`KSU_VERSION=32676`, UAPI v5), including upstream's latest
+  feature and compatibility updates, then reapplied the local SUSFS glue.
+  The matching release Manager is v3.3.0-79 (version code 32680). Upstream
+  warns that profiles may reset; driver and Manager are released together.
+- 2026-10-11: previously vendored backslashxx/KernelSU `v3.3.0+72` and
+  reapplied the six local SUSFS glue blocks on top.

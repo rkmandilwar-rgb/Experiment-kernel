@@ -73,9 +73,7 @@ static int do_report_event(void __user *arg)
 
 	switch (cmd.event) {
 	case EVENT_POST_FS_DATA: {
-		/* one-shot guard against concurrent EVENT_POST_FS_DATA delivery:
-		 * plain bool read-modify-write was non-atomic (benign in practice,
-		 * but the on_post_fs_data() side effects must run exactly once). */
+		/* Serialize the one-shot post-fs-data event. */
 		static atomic_t post_fs_data_done = ATOMIC_INIT(0);
 
 		// Reset for emulated soft reboot
@@ -260,7 +258,7 @@ static int do_uid_granted_root(void __user *arg)
 		return -EFAULT;
 	}
 
-	cmd.granted = ksu_is_allow_uid_for_current(cmd.uid);
+	cmd.granted = ksu_is_uid_granted_root(cmd.uid);
 
 	if (copy_to_user(arg, &cmd, sizeof(cmd))) {
 		pr_err("uid_granted_root: copy_to_user failed\n");

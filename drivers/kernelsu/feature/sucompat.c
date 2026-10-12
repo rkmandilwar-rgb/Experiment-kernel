@@ -146,6 +146,7 @@ check_ptr:
 	if (unlikely(!ptr_to_check))
 		return false;
 
+	assume_dereferenceable((void *)ptr_to_check, sizeof(uintptr_t));
 	if (unlikely(!*ptr_to_check))
 		return false;
 

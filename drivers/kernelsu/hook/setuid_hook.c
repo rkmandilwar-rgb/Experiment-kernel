@@ -3,7 +3,6 @@ static __always_inline void ksu_handle_setresuid_cred(struct cred *new, const st
 #ifdef CONFIG_KSU_SUSFS
 	bool is_susfs_app;
 #endif
-
 	if (!new || !old)
 		return;
 
