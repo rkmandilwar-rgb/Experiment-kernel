@@ -1313,8 +1313,13 @@ static void retract_page_tables(struct address_space *mapping, pgoff_t pgoff)
 				/* assume page table is clear */
 				_pmd = pmdp_collapse_flush(vma, addr, pmd);
 				spin_unlock(ptl);
+				/*
+				 * This tree accounts PTE pages in mm->pgtables_bytes
+				 * (mm_dec_nr_ptes()); the 4.14-era "mm->nr_ptes" field does
+				 * not exist here anymore, so only the new counter is
+				 * decremented - doing both would double-count.
+				 */
 				mm_dec_nr_ptes(vma->vm_mm);
-				atomic_long_dec(&mm->nr_ptes);
 				tlb_remove_table_sync_one();
 				pte_free(mm, pmd_pgtable(_pmd));
 				mmu_notifier_invalidate_range_end(mm, addr,
