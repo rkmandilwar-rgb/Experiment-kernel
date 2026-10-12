@@ -7,7 +7,8 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - arena/7d79595b-experiment-kernel
+      - a
+      - 'arena/**'
 
 permissions:
   contents: write
@@ -79,7 +80,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ccache
-          key: miatoll-ccache-${{ runner.os }}-${{ github.sha }}
+          # Key on the things that actually change the compiled output
+          # (defconfig + fragments + this workflow) instead of on the commit
+          # SHA, so consecutive runs on different commits reuse the cache.
+          key: miatoll-ccache-${{ runner.os }}-${{ hashFiles('arch/arm64/configs/vendor/xiaomi/miatoll_defconfig', 'kernel/configs/miatoll/*.config', '.github/workflows/build.yml') }}
           restore-keys: |
             miatoll-ccache-${{ runner.os }}-
 
@@ -189,6 +193,24 @@ jobs:
           require 'CONFIG_HIDRAW=y'
           require 'CONFIG_UHID=y'
 
+          # In-kernel performance/haptics tuning — compiled straight into
+          # arch/arm64/configs/vendor/xiaomi/miatoll_defconfig (no fragments,
+          # no runtime script).
+          require 'CONFIG_HZ_300=y'
+          require 'CONFIG_KSM=y'
+          require 'CONFIG_TRANSPARENT_HUGEPAGE=y'
+          require 'CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y'
+          require 'CONFIG_HUGETLBFS=y'
+          require 'CONFIG_IOSCHED_BFQ=y'
+          require 'CONFIG_BFQ_GROUP_IOSCHED=y'
+          require 'CONFIG_ZSWAP=y'
+          require 'CONFIG_FRONTSWAP=y'
+          require 'CONFIG_ZBUD=y'
+          require 'CONFIG_ZRAM_DEDUP=y'
+          require 'CONFIG_LZ4HC_COMPRESS=y'
+          require 'CONFIG_CRYPTO_LZ4HC=y'
+          require 'CONFIG_SND_HRTIMER=y'
+
           echo "::endgroup::"
           echo "::group::Config stats"
           echo "  =y  : $(grep -c '=y' out/.config)"
@@ -202,12 +224,15 @@ jobs:
           export CCACHE_DIR="$HOME/.cache/ccache"
           export KBUILD_BUILD_USER=stormbreaker
           export KBUILD_BUILD_HOST=kernel-ci
-          ccache --max-size=25G
+          # GitHub caps the whole cache at 10 GB per repo — keep ccache well
+          # below that so the cache entry can actually be saved/restored.
+          ccache --max-size=5G
 
           # Kernel 4.14 predates Clang 22; disable -Werror to tolerate
           # warnings that the newer toolchain now flags.
+          # -k (keep going) so a broken file does not hide the errors behind it.
           set +e
-          make -j"$(nproc)" O=out ARCH=arm64 \
+          make -k -j"$(nproc)" O=out ARCH=arm64 \
             LLVM=1 LLVM_IAS=1 \
             CC='ccache clang-22' HOSTCC='ccache clang-22' \
             CROSS_COMPILE=aarch64-linux-gnu- \
@@ -231,7 +256,7 @@ jobs:
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "### Errors" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
-            head -50 build-errors.txt >> "$GITHUB_STEP_SUMMARY"
+            head -200 build-errors.txt >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "### Last 200 lines of build.log" >> "$GITHUB_STEP_SUMMARY"
@@ -302,7 +327,9 @@ jobs:
   release:
     name: Publish release
     needs: build
-    if: false  # disabled for testing — re-enable when ready to release
+    # Kept permanently disabled: this pipeline only builds and uploads the
+    # artifact, it must never create a GitHub release.
+    if: false
     runs-on: ubuntu-24.04
     permissions:
       contents: write

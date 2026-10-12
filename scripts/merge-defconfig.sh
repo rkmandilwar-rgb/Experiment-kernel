@@ -11,6 +11,12 @@
 # Assumes a base .config already exists (from `make defconfig` or similar).
 # For every CONFIG_FOO=<value> line in each fragment, the fragment value
 # overwrites whatever was in the base .config.
+#
+# NOTE: performance/haptics tuning is *not* a fragment anymore — it is
+# compiled straight into arch/arm64/configs/vendor/xiaomi/miatoll_defconfig
+# (see the "In-kernel performance tuning" block at the end of that file).
+# Only the feature fragments below (eBPF, NTFS, EROFS, BBR, Droidspaces,
+# NetHunter) are merged here.
 
 set -euo pipefail
 
@@ -36,7 +42,9 @@ echo "  frags : ${#frags[@]} fragment(s)"
 count=0
 for f in "${frags[@]}"; do
     [ -f "$f" ] || { echo "SKIP $f (not found)"; continue; }
-    while IFS= read -r line; do
+    # "|| [ -n "$line" ]" keeps the last line when the fragment has no
+    # trailing newline (otherwise that option would be silently dropped).
+    while IFS= read -r line || [ -n "$line" ]; do
         [ -z "$line" ] && continue
         case "$line" in
             '#'*' is not set')

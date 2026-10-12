@@ -20,8 +20,9 @@ cp out/arch/arm64/boot/dtbo.img  "$AK3/"
 # DTB — AnyKernel3 expects a file named "dtb" (no extension)
 cp out/arch/arm64/boot/dts/qcom/cust-atoll-ab.dtb "$AK3/dtb" 2>/dev/null || true
 
-# Kernel modules (if any =m were built)
-find out/ -name "*.ko" -exec cp {} "$AK3/modules/system/lib/modules/" \; 2>/dev/null || true
+# Kernel modules: NOT shipped.  AnyKernel3/anykernel.sh sets do.modules=0 and
+# the zip is kernel-only (Image.gz + dtbo.img + dtb); flashing it must not
+# touch vendor/system, so out/**/*.ko stay out of the package on purpose.
 
 # Keep ramdisk/ and patch/ dirs present (even if empty)
 mkdir -p "$AK3/ramdisk" "$AK3/patch"

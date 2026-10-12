@@ -137,3 +137,13 @@ gcc32/
 gcc64/
 out/
 AnyKernel/
+
+# CI build outputs (workflow + scripts/*.sh)
+artifacts/
+AnyKernel3-stormbreaker/
+build.log
+build-errors.txt
+build-info.txt
+kernel.release
+release-notes.md
+Stormbreaker-*.zip
