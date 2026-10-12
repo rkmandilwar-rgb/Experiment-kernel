@@ -12,7 +12,8 @@
 #   - Companion module zips attached to every build: BRENE (SUSFS control
 #     panel) and the NoMount metamodule
 #   - Smooth-tuning pack baked into the kernel (no modules): touch-boost,
-#     schedutil/WALT defaults, GPU boot pwrlevel, KSM/THP/ZSWAP-lz4,
+#     schedutil/WALT defaults, GPU boot pwrlevel, conservative 4 GB memory
+#     profile (Android ZRAM + memcg/PSI; no KSM/THP/zswap layering),
 #     zram page-cluster 0, CFQ default + 256KB read-ahead
 #   - Haptics & sound: AW8624 high-priority vibrator workqueue, ALSA
 #     hrtimer backend, compress offload, USB audio, FF-memless
@@ -196,14 +197,10 @@ jobs:
           grep -q 'check_add_overflow' fs/erofs/inode.c \
             || { echo "::error::EROFS inline symlink bounds fix missing"; exit 1; }
 
-          # Kinesis-inspired idle and memory tuning
+          # CPU idle governor
           require 'CONFIG_CPU_IDLE_GOV_TEO=y'
-          require 'CONFIG_ZRAM_ENTROPY=y'
-          require 'CONFIG_ZRAM_ENTROPY_THRESHOLD=100000'
           grep -q 'cpuidle_governor_latency_req' drivers/cpuidle/governors/teo.c \
             || { echo "::error::TEO governor latency helper use missing"; exit 1; }
-          grep -q 'zram_shannon_entropy' drivers/block/zram/zram_drv.c \
-            || { echo "::error::ZRAM entropy optimization missing"; exit 1; }
 
           # NTFS
           require 'CONFIG_NTFS_FS=y'
@@ -299,16 +296,27 @@ jobs:
           # NoMount v2.1.0
           require 'CONFIG_NOMOUNT=y'
 
-          # Smooth-tuning pack: memory features
-          require 'CONFIG_KSM=y'
-          require 'CONFIG_TRANSPARENT_HUGEPAGE=y'
-          require 'CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y'
-          require 'CONFIG_FRONTSWAP=y'
-          require 'CONFIG_ZSWAP=y'
-          require 'CONFIG_ZPOOL=y'
-          require 'CONFIG_ZBUD=y'
-          require 'CONFIG_IDLE_PAGE_TRACKING=y'
-          require 'CONFIG_PAGE_EXTENSION=y'
+          # Conservative 4 GB RAM profile: standard Android swap/accounting.
+          require 'CONFIG_ZRAM=y'
+          require 'CONFIG_ZRAM_DEDUP=y'
+          require 'CONFIG_CRYPTO_LZ4=y'
+          require 'CONFIG_MEMCG=y'
+          require 'CONFIG_MEMCG_SWAP=y'
+          require 'CONFIG_MEMCG_SWAP_ENABLED=y'
+          require 'CONFIG_PSI=y'
+          require 'CONFIG_PSTORE=y'
+          require 'CONFIG_PSTORE_RAM=y'
+          require 'CONFIG_PSTORE_CONSOLE=y'
+          require_off 'CONFIG_KSM'
+          require_off 'CONFIG_TRANSPARENT_HUGEPAGE'
+          require_off 'CONFIG_FRONTSWAP'
+          require_off 'CONFIG_ZSWAP'
+          require_off 'CONFIG_ZPOOL'
+          require_off 'CONFIG_ZBUD'
+          require_off 'CONFIG_IDLE_PAGE_TRACKING'
+          require_off 'CONFIG_PAGE_EXTENSION'
+          require_off 'CONFIG_ZRAM_ENTROPY'
+          require_off 'CONFIG_PSI_DEFAULT_DISABLED'
 
           # Smooth-tuning pack: CFQ default for legacy queues
           # (UFS is blk-mq and auto-falls back to mq-deadline in
@@ -331,8 +339,6 @@ jobs:
             || { echo "::error::schedutil up-rate default missing"; exit 1; }
           grep -qE 'VM_MAX_READAHEAD[[:space:]]+256' include/linux/mm.h \
             || { echo "::error::256KB read-ahead default missing"; exit 1; }
-          grep -q 'ZSWAP_COMPRESSOR_DEFAULT "lz4"' mm/zswap.c \
-            || { echo "::error::zswap lz4 default missing"; exit 1; }
           if grep -q 'qcom,initial-pwrlevel = <6>' arch/arm64/boot/dts/qcom/atoll.dtsi; then
             echo "::error::GPU still boots at lowest power level"
             exit 1
