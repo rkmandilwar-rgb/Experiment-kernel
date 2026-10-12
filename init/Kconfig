@@ -2101,6 +2101,38 @@ config ASN1
 	  inform it as to what tags are to be expected in a stream and what
 	  functions to call on what tags.
 
+choice
+	prompt "Fake uname kernel version for BPF loaders"
+	default FAKE_UNAME_NONE
+	help
+	  Report a selected kernel release through uname() only to the root
+	  BPF loader processes configured in kernel/sys.c.
+
+config FAKE_UNAME_NONE
+	bool "None"
+	help
+	  Do not apply the BPF-loader uname spoof.
+
+config FAKE_UNAME_5_4
+	bool "5.4 (5.4.200)"
+
+config FAKE_UNAME_5_10
+	bool "5.10 (5.10.239)"
+
+config FAKE_UNAME_5_15
+	bool "5.15 (5.15.200)"
+
+config FAKE_UNAME_6_1
+	bool "6.1 (6.1.200)"
+
+config FAKE_UNAME_6_6
+	bool "6.6 (6.6.200)"
+
+config FAKE_UNAME_6_12
+	bool "6.12 (6.12.200)"
+
+endchoice
+
 source "kernel/Kconfig.locks"
 
 source "init/Kconfig.gki"

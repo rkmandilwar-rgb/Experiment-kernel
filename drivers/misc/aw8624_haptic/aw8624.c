@@ -684,9 +684,18 @@ static int aw8624_haptic_set_repeat_wav_seq(struct aw8624 *aw8624,
 	return 0;
 }
 
+static unsigned char aw8624_haptic_set_level(struct aw8624 *aw8624,
+					     unsigned char gain)
+{
+	int level = clamp(READ_ONCE(aw8624->ulevel), 0, 128);
+
+	return level * gain / 128;
+}
+
 static int aw8624_haptic_set_gain(struct aw8624 *aw8624, unsigned char gain)
 {
-	aw8624_i2c_write(aw8624, AW8624_REG_DATDBG, gain);
+	aw8624_i2c_write(aw8624, AW8624_REG_DATDBG,
+			 aw8624_haptic_set_level(aw8624, gain));
 	return 0;
 }
 
@@ -2002,6 +2011,8 @@ static int aw8624_haptic_init(struct aw8624 *aw8624)
 	unsigned char reg_val = 0, reg_flag = 0;
 	unsigned char bemf_config = 0;
 
+	/* Full hardware gain by default; userspace may lower it via ulevel. */
+	aw8624->ulevel = 128;
 	pr_debug("%s enter\n", __func__);
 	ret = misc_register(&aw8624_haptic_misc);
 	if (ret) {
@@ -3237,6 +3248,40 @@ static ssize_t aw8624_gain_store(struct device *dev,
 	return count;
 }
 
+static ssize_t aw8624_ulevel_show(struct device *dev,
+				  struct device_attribute *attr, char *buf)
+{
+	struct aw8624 *aw8624 = dev_get_drvdata(dev);
+	int ulevel;
+
+	mutex_lock(&aw8624->lock);
+	ulevel = aw8624->ulevel;
+	mutex_unlock(&aw8624->lock);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", ulevel);
+}
+
+static ssize_t aw8624_ulevel_store(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t count)
+{
+	struct aw8624 *aw8624 = dev_get_drvdata(dev);
+	unsigned int val;
+	int rc;
+
+	rc = kstrtouint(buf, 0, &val);
+	if (rc)
+		return rc;
+	if (val > 128)
+		return -ERANGE;
+
+	mutex_lock(&aw8624->lock);
+	aw8624->ulevel = val;
+	aw8624_haptic_set_gain(aw8624, aw8624->gain);
+	mutex_unlock(&aw8624->lock);
+	return count;
+}
+
 static ssize_t aw8624_seq_show(struct device *dev,
 			       struct device_attribute *attr, char *buf)
 {
@@ -3881,6 +3926,8 @@ static DEVICE_ATTR(index, 0644, aw8624_index_show,
 		   aw8624_index_store);
 static DEVICE_ATTR(gain, 0644, aw8624_gain_show,
 		   aw8624_gain_store);
+static DEVICE_ATTR(ulevel, 0644, aw8624_ulevel_show,
+		   aw8624_ulevel_store);
 static DEVICE_ATTR(seq, 0644, aw8624_seq_show, aw8624_seq_store);
 static DEVICE_ATTR(loop, 0644, aw8624_loop_show,
 		   aw8624_loop_store);
@@ -3923,6 +3970,7 @@ static struct attribute *aw8624_vibrator_attributes[] = {
 	&dev_attr_activate_mode.attr,
 	&dev_attr_index.attr,
 	&dev_attr_gain.attr,
+	&dev_attr_ulevel.attr,
 	&dev_attr_seq.attr,
 	&dev_attr_loop.attr,
 	&dev_attr_rtp.attr,

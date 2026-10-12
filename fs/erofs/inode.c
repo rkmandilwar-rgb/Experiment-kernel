@@ -5,6 +5,7 @@
  */
 #include "xattr.h"
 
+#include <linux/overflow.h>
 #include <trace/events/erofs.h>
 
 /*
@@ -197,29 +198,27 @@ static int erofs_fill_symlink(struct inode *inode, void *data,
 			      unsigned int m_pofs)
 {
 	struct erofs_inode *vi = EROFS_I(inode);
+	loff_t off;
 	char *lnk;
 
-	/* if it cannot be handled with fast symlink scheme */
-	if (vi->datalayout != EROFS_INODE_FLAT_INLINE ||
-	    inode->i_size >= PAGE_SIZE) {
+	/*
+	 * Fast symlinks are stored inline with the inode. Fall back to the
+	 * regular read path unless the complete payload fits in this block.
+	 * Check arithmetic before using the offsets: a corrupt inode must not
+	 * make the inline memcpy read past the metadata block.
+	 */
+	if (vi->datalayout != EROFS_INODE_FLAT_INLINE || inode->i_size < 0 ||
+	    check_add_overflow((loff_t)m_pofs, (loff_t)vi->xattr_isize, &off) ||
+	    check_add_overflow(off, inode->i_size, &off) ||
+	    off > i_blocksize(inode)) {
 		inode->i_op = &erofs_symlink_iops;
 		return 0;
 	}
 
+	m_pofs += vi->xattr_isize;
 	lnk = kmalloc(inode->i_size + 1, GFP_KERNEL);
 	if (!lnk)
 		return -ENOMEM;
-
-	m_pofs += vi->xattr_isize;
-	/* inline symlink data shouldn't cross page boundary as well */
-	if (m_pofs + inode->i_size > PAGE_SIZE) {
-		kfree(lnk);
-		erofs_err(inode->i_sb,
-			  "inline data cross block boundary @ nid %llu",
-			  vi->nid);
-		DBG_BUGON(1);
-		return -EFSCORRUPTED;
-	}
 
 	memcpy(lnk, data + m_pofs, inode->i_size);
 	lnk[inode->i_size] = '\0';

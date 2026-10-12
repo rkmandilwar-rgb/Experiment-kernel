@@ -24,6 +24,8 @@
 #include <linux/device.h>
 #include <linux/genhd.h>
 #include <linux/highmem.h>
+#include <linux/log2.h>
+#include <linux/mm.h>
 #include <linux/slab.h>
 #include <linux/backing-dev.h>
 #include <linux/string.h>
@@ -42,6 +44,11 @@ static DEFINE_MUTEX(zram_index_mutex);
 
 static int zram_major;
 static const char *default_compressor = "lz4";
+
+#ifdef CONFIG_ZRAM_ENTROPY
+unsigned long sysctl_zram_entropy_threshold __read_mostly =
+	CONFIG_ZRAM_ENTROPY_THRESHOLD;
+#endif
 
 /* Module params (documentation at end) */
 static unsigned int num_devices = 1;
@@ -1408,6 +1415,35 @@ out:
 	return ret;
 }
 
+#ifdef CONFIG_ZRAM_ENTROPY
+static inline u32 zram_ilog2_w(u64 n)
+{
+	return ilog2(n * n * n * n);
+}
+
+static inline s32 zram_shannon_entropy(const u8 *src)
+{
+	s32 entropy_sum = 0;
+	u32 sz_base, i;
+	u16 entropy_count[256] = { 0 };
+
+	for (i = 0; i < PAGE_SIZE; i++)
+		entropy_count[src[i]]++;
+
+	sz_base = zram_ilog2_w(PAGE_SIZE);
+	for (i = 0; i < ARRAY_SIZE(entropy_count); i++) {
+		if (entropy_count[i]) {
+			s32 count = entropy_count[i];
+
+			entropy_sum += count *
+				(sz_base - zram_ilog2_w((u64)count));
+		}
+	}
+
+	return entropy_sum;
+}
+#endif
+
 static int __zram_bvec_write(struct zram *zram, struct bio_vec *bvec,
 				u32 index, struct bio *bio)
 {
@@ -1441,7 +1477,15 @@ static int __zram_bvec_write(struct zram *zram, struct bio_vec *bvec,
 compress_again:
 	zstrm = zcomp_stream_get(zram->comp);
 	src = kmap_atomic(page);
+#ifdef CONFIG_ZRAM_ENTROPY
+	if (zram_shannon_entropy((const u8 *)src) >
+	    READ_ONCE(sysctl_zram_entropy_threshold))
+		comp_len = PAGE_SIZE;
+	else
+		ret = zcomp_compress(zstrm, src, &comp_len);
+#else
 	ret = zcomp_compress(zstrm, src, &comp_len);
+#endif
 	kunmap_atomic(src);
 
 	if (unlikely(ret)) {

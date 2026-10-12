@@ -182,10 +182,28 @@ jobs:
           require 'CONFIG_CGROUP_BPF=y'
           require 'CONFIG_NET_CLS_BPF=y'
           require 'CONFIG_LWTUNNEL_BPF=y'
+          require 'CONFIG_FAKE_UNAME_5_10=y'
+          grep -q 'current_uid().val == 0' kernel/sys.c \
+            || { echo "::error::BPF fake-uname root check missing"; exit 1; }
 
-          # EROFS
+          # EROFS (including compression, xattrs, ACLs, and security labels)
           require 'CONFIG_EROFS_FS=y'
+          require 'CONFIG_EROFS_FS_XATTR=y'
+          require 'CONFIG_EROFS_FS_POSIX_ACL=y'
+          require 'CONFIG_EROFS_FS_SECURITY=y'
           require 'CONFIG_EROFS_FS_ZIP=y'
+          require 'CONFIG_LZ4_DECOMPRESS=y'
+          grep -q 'check_add_overflow' fs/erofs/inode.c \
+            || { echo "::error::EROFS inline symlink bounds fix missing"; exit 1; }
+
+          # Kinesis-inspired idle and memory tuning
+          require 'CONFIG_CPU_IDLE_GOV_TEO=y'
+          require 'CONFIG_ZRAM_ENTROPY=y'
+          require 'CONFIG_ZRAM_ENTROPY_THRESHOLD=100000'
+          grep -q 'cpuidle_governor_latency_req' drivers/cpuidle/governors/teo.c \
+            || { echo "::error::TEO governor latency helper use missing"; exit 1; }
+          grep -q 'zram_shannon_entropy' drivers/block/zram/zram_drv.c \
+            || { echo "::error::ZRAM entropy optimization missing"; exit 1; }
 
           # NTFS
           require 'CONFIG_NTFS_FS=y'
@@ -321,6 +339,10 @@ jobs:
           require 'CONFIG_DRV2624_HAPTIC=y'
           grep -q 'WQ_HIGHPRI' drivers/misc/aw8624_haptic/aw8624.c \
             || { echo "::error::AW8624 haptic workqueue not high-priority"; exit 1; }
+          grep -q 'static ssize_t aw8624_ulevel_store' drivers/misc/aw8624_haptic/aw8624.c \
+            || { echo "::error::AW8624 ulevel control missing"; exit 1; }
+          grep -q 'if (val > 128)' drivers/misc/aw8624_haptic/aw8624.c \
+            || { echo "::error::AW8624 ulevel range check missing"; exit 1; }
 
           # Boot compatibility: every initramfs compression format this
           # 4.14 tree supports must be decodable (RD_ZSTD doesn't exist

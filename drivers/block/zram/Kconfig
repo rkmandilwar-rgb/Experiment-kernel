@@ -53,3 +53,21 @@ config ZRAM_MEMORY_TRACKING
 	  /sys/kernel/debug/zram/zramX/block_state.
 
 	  See Documentation/blockdev/zram.txt for more information.
+
+config ZRAM_ENTROPY
+	bool "Skip compression for high-entropy ZRAM pages"
+	depends on ZRAM
+	default n
+	help
+	  Estimate page entropy before compression and store high-entropy pages
+	  uncompressed. This can save compression CPU time at the cost of using
+	  more memory for those pages. The threshold is available under
+	  /proc/sys/vm/zram_entropy_threshold.
+
+config ZRAM_ENTROPY_THRESHOLD
+	int "ZRAM entropy threshold"
+	depends on ZRAM && ZRAM_ENTROPY
+	default 100000
+	help
+	  Pages with an entropy score above this value are stored uncompressed.
+	  The default is tuned to the 4 KiB pages used on this platform.

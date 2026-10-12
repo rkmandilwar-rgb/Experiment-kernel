@@ -8,8 +8,10 @@
  * This code is licenced under the GPL.
  */
 
-#include <linux/mutex.h>
+#include <linux/cpu.h>
 #include <linux/cpuidle.h>
+#include <linux/mutex.h>
+#include <linux/pm_qos.h>
 
 #include "cpuidle.h"
 
@@ -92,3 +94,18 @@ int cpuidle_register_governor(struct cpuidle_governor *gov)
 
 	return ret;
 }
+EXPORT_SYMBOL_GPL(cpuidle_register_governor);
+
+/**
+ * cpuidle_governor_latency_req - Compute the latency constraint for a CPU.
+ * @cpu: Target CPU.
+ */
+int cpuidle_governor_latency_req(unsigned int cpu)
+{
+	int global_req = pm_qos_request_for_cpu(PM_QOS_CPU_DMA_LATENCY, cpu);
+	struct device *device = get_cpu_device(cpu);
+	int device_req = device ? dev_pm_qos_raw_read_value(device) : global_req;
+
+	return device_req < global_req ? device_req : global_req;
+}
+EXPORT_SYMBOL_GPL(cpuidle_governor_latency_req);
