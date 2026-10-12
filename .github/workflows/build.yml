@@ -209,8 +209,19 @@ jobs:
           require 'CONFIG_NTFS_FS=y'
           require 'CONFIG_NTFS_RW=y'
 
-          # BBR
+          # BBRplus is the default; retain classic BBR as an alternative.
           require 'CONFIG_TCP_CONG_BBR=y'
+          require 'CONFIG_TCP_CONG_BBRPLUS=y'
+          require 'CONFIG_DEFAULT_BBRPLUS=y'
+          require 'CONFIG_DEFAULT_TCP_CONG="bbrplus"'
+          require 'CONFIG_NET_SCH_FQ=y'
+          require 'CONFIG_NET_SCH_DEFAULT=y'
+          require 'CONFIG_DEFAULT_FQ=y'
+          require 'CONFIG_DEFAULT_NET_SCH="fq"'
+          grep -Eq 'name[[:space:]]*=[[:space:]]*"bbrplus"' net/ipv4/tcp_bbrplus.c \
+            || { echo "::error::BBRplus congestion-control registration missing"; exit 1; }
+          grep -q 'BUILD_BUG_ON(sizeof(struct bbr) > ICSK_CA_PRIV_SIZE)' net/ipv4/tcp_bbrplus.c \
+            || { echo "::error::BBRplus private-state size check missing"; exit 1; }
 
           # Droidspaces / namespaces
           require 'CONFIG_SYSVIPC=y'
@@ -605,6 +616,8 @@ jobs:
           The installer flashes boot only; it does not include or flash a new DTB/DTBO. The installed ROM device tree remains unchanged. If /data is mounted, the installer attempts optional boot and DTBO backups under /sdcard.
 
           KernelSU v3.3.0-79 uses UAPI v5 and must be paired with the included Manager. Upstream warns that existing KernelSU profiles may reset during this update; export important settings first.
+
+          TCP congestion control defaults to BBRplus, with classic BBR still available. FQ is enabled as the default qdisc for pacing.
 
           ## Downloads
 
