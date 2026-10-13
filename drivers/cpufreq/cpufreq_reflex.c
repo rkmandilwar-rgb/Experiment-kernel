@@ -821,12 +821,12 @@ static struct attribute *rfx_attrs[] = {
 
 static void rfx_tunables_free(struct kobject *kobj)
 {
-	struct gov_attr_set *attr_set = to_gov_attr_set(kobj);
+	struct gov_attr_set *attr_set = container_of(kobj, struct gov_attr_set, kobj);
 
 	kfree(to_rfx_tunables(attr_set));
 }
 
-static const struct kobj_type rfx_tunables_ktype = {
+static struct kobj_type rfx_tunables_ktype = {
 	.default_attrs = rfx_attrs,
 	.sysfs_ops = &governor_sysfs_ops,
 	.release = &rfx_tunables_free,

@@ -10,9 +10,19 @@
 #ifndef _CPUFREQ_REFLEX_COMPAT_H
 #define _CPUFREQ_REFLEX_COMPAT_H
 
-/* 4.14: arch_scale_cpu_capacity(struct sched_domain *sd, int cpu) */
+/* 4.14: capacity/frequency scale helpers take (sd, cpu) */
 #undef arch_scale_cpu_capacity
 #define arch_scale_cpu_capacity(cpu) topology_get_cpu_scale(NULL, (cpu))
+#undef arch_scale_freq_capacity
+#define arch_scale_freq_capacity(cpu) topology_get_freq_scale(NULL, (cpu))
+
+/* kernel/sched/sched.h fallback, mirrored for code outside kernel/sched. */
+#define arch_scale_freq_invariant()	(true)
+
+/* 4.14 has no per-governor dynamic-switching flag. */
+#ifndef CPUFREQ_GOV_DYNAMIC_SWITCHING
+#define CPUFREQ_GOV_DYNAMIC_SWITCHING	0
+#endif
 
 /*
  * 4.14 has no <linux/sched/util.h> helpers.  Keep exactly one DVFS
