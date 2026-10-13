@@ -8,8 +8,8 @@
 #     (issue #5 rev v2.3) + LSM security hooks
 #   - SUSFS v2.3.0 — non-GKI 4.14 semantic port (fs/susfs.c + fs hooks),
 #     userspace ABI bridged over the KernelSU reboot supercall
-#   - NoMount v2.1.0 — fs/nomount VFS path redirection (+ post-release
-#     evict_inode fix 7e7342cd4)
+#   - NoMount v2.1.1 — fs/nomount VFS path redirection (UAF/OOB fixes,
+#     packed rule storage, call_rcu freeing, scalable bloom filters)
 #   - Companion module zips attached to every build: BRENE (SUSFS control
 #     panel) and the NoMount metamodule
 #   - Smooth-tuning pack baked into the kernel (no modules): touch-boost,
@@ -64,8 +64,8 @@ env:
   BRENE_TAG: v0.0.70
   BRENE_ASSET: BRENE-v0.0.70.zip
   NOMOUNT_REPO: maxsteeel/nomount
-  NOMOUNT_TAG: v2.1.0
-  NOMOUNT_ASSET: NoMount-v2.1.0-release-500.zip
+  NOMOUNT_TAG: v2.1.1
+  NOMOUNT_ASSET: NoMount-v2.1.1-release-7046c7a-555.zip
 
 jobs:
   build:
@@ -425,7 +425,7 @@ jobs:
           grep -q '#define KERNEL_SU_UAPI_VERSION 5' drivers/kernelsu/include/uapi/supercall.h \
             || { echo "::error::KernelSU UAPI v5 is required"; exit 1; }
           grep -q 'NOMOUNT_BASE_VERSION "21"' fs/nomount/nomount.h \
-            || { echo "::error::NoMount is not the v2.1.0 line"; exit 1; }
+            || { echo "::error::NoMount is not the v2.1.x line"; exit 1; }
           # SUSFS userspace ABI must be bridged into the KSU supercall
           grep -q 'SUSFS_MAGIC' drivers/kernelsu/supercall/supercall.c \
             || { echo "::error::KSU<->SUSFS supercall bridge missing"; exit 1; }

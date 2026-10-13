@@ -7,4 +7,4 @@
 # (the #ifdef in nomount.h handles the missing define).
 
 obj-$(CONFIG_NOMOUNT) += nomount.o
-ccflags-y += -std=gnu11 -Wno-declaration-after-statement
+ccflags-y += -std=gnu11 -Wno-declaration-after-statement -O3
