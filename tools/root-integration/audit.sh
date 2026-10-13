@@ -93,6 +93,25 @@ grep -q "if (!aw8624->enable_pin_control)" drivers/misc/aw8624_haptic/aw8624.c \
 grep -q 'awinic,aw8624_haptic' arch/arm64/boot/dts/qcom/cust-atoll-idp.dtsi \
   && ok "device tree node present" || fail "aw8624 device tree node missing"
 
+echo "== SEA ports (Reflex / Simple GPU / BT + wakelock tuning)"
+grep -q "CPU_FREQ_GOV_REFLEX" drivers/cpufreq/Kconfig \
+  && ok "Reflex Kconfig wired" || fail "Reflex Kconfig missing"
+grep -qE 'obj-[$][(]CONFIG_CPU_FREQ_GOV_REFLEX[)]' drivers/cpufreq/Makefile \
+  && grep -qF 'cpufreq_reflex.o' drivers/cpufreq/Makefile \
+  && ok "Reflex Makefile wired" || fail "Reflex Makefile not wired"
+[ -e drivers/cpufreq/cpufreq_reflex.c ] && ok "cpufreq_reflex.c present" || fail "cpufreq_reflex.c missing"
+grep -q "CONFIG_CPU_FREQ_GOV_REFLEX=y" arch/arm64/configs/vendor/xiaomi/miatoll_defconfig \
+  && ok "Reflex enabled in defconfig" || fail "Reflex not enabled in defconfig"
+grep -q "simple_gpu_algorithm" drivers/devfreq/governor_msm_adreno_tz.c \
+  && ok "Simple GPU hook in msm_adreno_tz" || fail "Simple GPU hook missing"
+grep -qF 'simple_gpu_algorithm.o' drivers/devfreq/Makefile \
+  && ok "Simple GPU built alongside adreno tz" || fail "Simple GPU missing from devfreq Makefile"
+for opt in CONFIG_BT_RFCOMM=y CONFIG_BT_RFCOMM_TTY=y CONFIG_BT_BNEP=y CONFIG_BT_HIDP=y \
+           CONFIG_PM_AUTOSLEEP=y CONFIG_PM_WAKELOCKS_GC=y; do
+  grep -q "$opt" arch/arm64/configs/vendor/xiaomi/miatoll_defconfig \
+    && ok "defconfig: $opt" || fail "defconfig lost $opt"
+done
+
 echo "== AnyKernel3 installer"
 if bash "$TOP/tools/root-integration/test-ak3.sh" "$TOP/AnyKernel3" >/dev/null 2>&1; then
   ok "flashable zip installer resolves the boot partition"

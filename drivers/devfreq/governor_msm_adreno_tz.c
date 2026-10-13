@@ -382,7 +382,12 @@ static int tz_get_target_freq(struct devfreq *devfreq, unsigned long *freq)
 	 * If there is an extended block of busy processing,
 	 * increase frequency.  Otherwise run the normal algorithm.
 	 */
-	if (!priv->disable_busy_time_burst &&
+	if (simple_gpu_active) {
+		/* Optional simplified algorithm (faux123/flar2), runtime
+		 * toggled via simple_gpu_activate. */
+		val = simple_gpu_algorithm(level,
+				devfreq->profile->max_state - 1, priv);
+	} else if (!priv->disable_busy_time_burst &&
 			priv->bin.busy_time > CEILING) {
 		val = -1 * level;
 	} else {

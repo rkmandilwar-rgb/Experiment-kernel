@@ -61,3 +61,13 @@ void cpufreq_remove_update_util_hook(int cpu)
 	rcu_assign_pointer(per_cpu(cpufreq_update_util_data, cpu), NULL);
 }
 EXPORT_SYMBOL_GPL(cpufreq_remove_update_util_hook);
+
+/**
+ * cpufreq_this_cpu_can_update - Check if the current CPU can update @policy.
+ * @policy: the cpufreq policy to check.
+ */
+bool cpufreq_this_cpu_can_update(struct cpufreq_policy *policy)
+{
+	return cpumask_test_cpu(smp_processor_id(), policy->cpus);
+}
+EXPORT_SYMBOL_GPL(cpufreq_this_cpu_can_update);

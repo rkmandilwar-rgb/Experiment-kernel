@@ -230,6 +230,20 @@ config CPU_FREQ_GOV_SCHEDUTIL
 
 	  If in doubt, say N.
 
+config CPU_FREQ_GOV_REFLEX
+	bool "'reflex' cpufreq policy governor"
+	depends on CPU_FREQ && SMP
+	select CPU_FREQ_GOV_ATTR_SET
+	select IRQ_WORK
+	help
+	  Reflex is schedutil plus a measured fast path for rising load: it
+	  gets bursts that follow an idle up to speed within one scheduler
+	  tick instead of waiting for PELT to ramp up.  Per-CPU demand is
+	  measured over closed intervals and a latency_weight tunable trades
+	  latency for energy through an efficiency floor.
+
+	  If in doubt, say N.
+
 config CPU_FREQ_GOV_INTERACTIVE
 	tristate "'interactive' cpufreq policy governor"
 	depends on CPU_FREQ

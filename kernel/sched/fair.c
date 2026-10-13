@@ -6793,6 +6793,19 @@ schedtune_task_margin(struct task_struct *task)
 
 #endif /* CONFIG_SCHED_TUNE */
 
+/*
+ * cpufreq_pelt_decay - decay a value over a span exactly as PELT does.
+ * @val: the value to decay.
+ * @delta_ns: the span, in ns; counted in whole PELT periods (1024 * 1024 ns).
+ *
+ * For cpufreq governors that keep their own PELT-paced signal (Reflex).
+ */
+u64 cpufreq_pelt_decay(u64 val, u64 delta_ns)
+{
+	return decay_load(val, delta_ns >> 20);
+}
+EXPORT_SYMBOL_GPL(cpufreq_pelt_decay);
+
 unsigned long
 boosted_cpu_util(int cpu, struct sched_walt_cpu_load *walt_load)
 {
