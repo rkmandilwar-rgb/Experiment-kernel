@@ -3,7 +3,7 @@
 # Built with LLVM 22 from apt.llvm.org (official), no GCC for aarch64.
 #
 # Root/hiding stack baked in:
-#   - KernelSU (backslashxx fork) v3.3.0-79 — drivers/kernelsu, manual hooks
+#   - KernelSU (backslashxx fork) v3.3.1 — drivers/kernelsu, manual hooks
 #     (issue #5 rev v2.3) + LSM security hooks
 #   - SUSFS v2.3.0 — non-GKI 4.14 semantic port (fs/susfs.c + fs hooks),
 #     userspace ABI bridged over the KernelSU reboot supercall
@@ -274,7 +274,7 @@ jobs:
           require 'CONFIG_HIDRAW=y'
           require 'CONFIG_UHID=y'
 
-          # KernelSU (backslashxx v3.3.0-79)
+          # KernelSU (backslashxx v3.3.1)
           require 'CONFIG_KSU=y'
           require 'CONFIG_KSU_LSM_SECURITY_HOOKS=y'
           require 'CONFIG_KSU_HEURISTIC_IN_TREE_BUILD=y'
@@ -382,7 +382,7 @@ jobs:
           grep -q 'SUSFS_VERSION "v2.3.0"' include/linux/susfs.h \
             || { echo "::error::SUSFS is not v2.3.0"; exit 1; }
           grep -q 'KSU_VERSION=32676' drivers/kernelsu/Makefile \
-            || { echo "::error::KernelSU is not v3.3.0-79 (32676)"; exit 1; }
+            || { echo "::error::KernelSU is not v3.3.1 (32676)"; exit 1; }
           grep -q '#define KERNEL_SU_UAPI_VERSION 5' drivers/kernelsu/include/uapi/supercall.h \
             || { echo "::error::KernelSU UAPI v5 is required"; exit 1; }
           grep -q 'NOMOUNT_BASE_VERSION "21"' fs/nomount/nomount.h \
@@ -574,9 +574,9 @@ jobs:
           kernel_zip=$(basename "${kernel_zips[0]}")
           cp "${kernel_zips[0]}" "release-payload/${kernel_zip}"
 
-          # Match the in-kernel KernelSU v3.3.0-79 driver (version 32676).
-          manager_apk='KernelSU_v3.3.0-79_32680-release.apk'
-          gh release download 'v3.3.0-79' \
+          # Match the in-kernel KernelSU v3.3.1 driver (version 32676).
+          manager_apk='KernelSU_v3.3.1_32680-release.apk'
+          gh release download 'v3.3.1' \
             --repo backslashxx/KernelSU \
             --pattern "$manager_apk" \
             --dir release-payload
@@ -590,7 +590,7 @@ jobs:
               raise SystemExit(f"Expected only two release assets, found: {[p.name for p in assets]}")
           if not any(p.name.startswith("Stormbreaker-miatoll-") and p.name.endswith(".zip") for p in assets):
               raise SystemExit("Flashable Stormbreaker kernel ZIP is missing")
-          if not any(p.name == "KernelSU_v3.3.0-79_32680-release.apk" for p in assets):
+          if not any(p.name == "KernelSU_v3.3.1_32680-release.apk" for p in assets):
               raise SystemExit("Matching KernelSU Manager APK is missing")
           for asset in assets:
               if not is_zipfile(asset):
@@ -622,14 +622,14 @@ jobs:
           Build: ${GITHUB_RUN_NUMBER}
           Source commit: ${GITHUB_SHA}
           Kernel: 4.14.357-openela
-          KernelSU driver: backslashxx v3.3.0-79 (32676; UAPI v5)
+          KernelSU driver: backslashxx v3.3.1 (32676; UAPI v5)
           Device variants: Curtana / Gram / Joyeuse / Excalibur
 
           The installer flashes boot only; it does not include or flash a new DTB/DTBO. The installed ROM device tree remains unchanged. If /data is mounted, the installer attempts optional boot and DTBO backups under /sdcard.
 
           Memory: conservative 4 GB profile — Android ZRAM (LZ4 + dedup) with memcg/PSI accounting, zram-first reclaim (vm.swappiness 100), one swap page per fault, 256 KB read-ahead. KSM, THP, zswap/frontswap and HugeTLB are disabled.
 
-          KernelSU v3.3.0-79 uses UAPI v5 and must be paired with the included Manager. Upstream warns that existing KernelSU profiles may reset during this update; export important settings first.
+          KernelSU v3.3.1 uses UAPI v5 and must be paired with the included Manager (KernelSU_v3.3.1_32680). Upstream warns that existing KernelSU profiles may reset during this update; export important settings first.
 
           TCP congestion control defaults to BBRplus, with classic BBR still available. FQ is enabled as the default qdisc for pacing.
 

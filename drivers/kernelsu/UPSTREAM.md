@@ -3,8 +3,8 @@
 This directory vendors the kernel component from:
 
 - Repository: https://github.com/backslashxx/KernelSU
-- Release/tag: `v3.3.0-79` (kernel driver `KSU_VERSION=32676`)
-- Matching Manager release asset: `KernelSU_v3.3.0-79_32680-release.apk`
+- Release/tag: `v3.3.1` (kernel driver `KSU_VERSION=32676`)
+- Matching Manager release asset: `KernelSU_v3.3.1_32680-release.apk`
 - The upstream `kernel/` subtree is imported, with only the local SUSFS v2.3.0
   glue documented below reapplied.
 - The driver exposes KernelSU UAPI v5, which the matching Manager requires.
@@ -29,7 +29,7 @@ It is integrated in-tree for the Linux 4.14 non-GKI Miatoll kernel
 
 Upstream backslashxx/KernelSU ships no SUSFS support. The following local
 blocks bridge SUSFS v2.3.0 (see `fs/SUSFS_UPSTREAM.md`) into the driver; they
-are retained across the `v3.3.0-79` refresh:
+are retained across the `v3.3.1` refresh:
 
 - `Kconfig` — the "KernelSU - SUSFS" menu (`KSU_SUSFS` + feature toggles;
   `KSU_SUSFS` depends on `FUSE_FS` because `fs/susfs.c` uses fuse internals).
@@ -52,6 +52,15 @@ are retained across the `v3.3.0-79` refresh:
 
 ## Sync history
 
+- 2026-10-13: refreshed the vendored driver to backslashxx/KernelSU
+  `v3.3.1` and reapplied the local SUSFS glue + `kernel_compat.h` build
+  fixes. The `kernel/` subtree is byte-identical to the previous
+  `v3.3.0-79` (tag `32676`) base — v3.3.1 is a Manager/userspace release —
+  so the driver stays `KSU_VERSION=32676`, UAPI v5. The matching release
+  Manager is v3.3.1 (`KernelSU_v3.3.1_32680-release.apk`, version code
+  32680); the old v3.3.0-79 GitHub release was deleted upstream, which is
+  what broke the previous release job. Driver and Manager are released
+  together.
 - 2026-10-12: refreshed the vendored driver to backslashxx/KernelSU
   `v3.3.0-79` (`KSU_VERSION=32676`, UAPI v5), including upstream's latest
   feature and compatibility updates, then reapplied the local SUSFS glue.

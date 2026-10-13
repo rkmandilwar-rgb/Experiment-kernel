@@ -5905,7 +5905,7 @@ CONFIG_SBITMAP=y
 CONFIG_RMNET_PERF=m
 CONFIG_RMNET_SHS=m
 
-# ── KernelSU (non-GKI, backslashxx fork v3.3.0-79) ──
+# ── KernelSU (non-GKI, backslashxx fork v3.3.1) ──
 CONFIG_KSU=y
 # CONFIG_KSU_KPROBES_KSUD is not set
 # CONFIG_KSU_HACK_ARM64_BRANCH_LINK is not set
