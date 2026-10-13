@@ -1,6 +1,7 @@
 # Stormbreaker — build & release (miatoll)
 # Non-GKI kernel v4.14.357 for Curtana / Gram / Joyeuse / Excalibur
-# Built with LLVM 22 from apt.llvm.org (official), no GCC for aarch64.
+# Built with pinned AOSP Clang r596125 (Polly-enabled), fully LLVM
+# (LLVM_IAS=1, ld.lld) — the Kinesis/Saamrox toolchain setup.
 #
 # Root/hiding stack baked in:
 #   - KernelSU (backslashxx fork) v3.3.1 — drivers/kernelsu, manual hooks
@@ -18,6 +19,10 @@
 #     256KB read-ahead
 #   - Haptics & sound: AW8624 high-priority vibrator workqueue, ALSA
 #     hrtimer backend, compress offload, USB audio, FF-memless
+#   - Kinesis-steal pack (from Saamitk/Kinesis@17): CASS scheduler, Oplus MM
+#     hacks (direct_swappiness, zsmalloc order-3), PELT-16, Polly + Clang
+#     LTO/ThinLTO + inlining on pinned AOSP clang r596125, Shadow Call Stack,
+#     LZ4KD decompressor, Westwood TCP, USB EHCI/OHCI, IR/RC core
 name: Build & Release Stormbreaker Kernel
 
 on:
@@ -52,7 +57,8 @@ concurrency:
 env:
   ARCH: arm64
   DEFCONFIG: vendor/xiaomi/miatoll_defconfig
-  LLVM_VERSION: "22"
+  # Pinned AOSP Clang (Polly-capable) — Kinesis-exact toolchain
+  LLVM_VER: "r596125"
   # Companion userspace modules bundled with every kernel build
   BRENE_REPO: rrr333nnn333/BRENE
   BRENE_TAG: v0.0.70
@@ -85,37 +91,39 @@ jobs:
           df -h /mnt /  2>/dev/null | tail -2
           echo "::endgroup::"
 
-      - name: Install LLVM 22 + build dependencies
+      - name: Install build dependencies
         run: |
-          # ── LLVM 22 from apt.llvm.org (official stable) ──
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
-            | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] \
-            http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
-            | sudo tee /etc/apt/sources.list.d/llvm-22.list
-
           sudo apt-get update
-          sudo apt-get install -y \
-            clang-${LLVM_VERSION} lld-${LLVM_VERSION} \
-            llvm-${LLVM_VERSION} \
+          sudo apt-get install -y --no-install-recommends \
             bc bison ccache flex git kmod libelf-dev libc6-dev \
-            make libssl-dev python3 rsync zstd zip \
+            make libssl-dev python3 rsync zstd zip curl ca-certificates \
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi
+          sudo apt-get install -y --no-install-recommends libtinfo5 || true
 
-          # ── Remove system clang to avoid conflicts with LLVM 22 ──
-          sudo apt-get remove -y clang clang-18 lld lld-18 2>/dev/null || true
-
-          # ── Create unversioned symlinks so the Makefile finds clang, ld.lld, etc. ──
-          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-${LLVM_VERSION} 100
-          sudo update-alternatives --install /usr/bin/ld.lld ld.lld /usr/bin/ld.lld-${LLVM_VERSION} 100
-          for tool in ar nm objcopy objdump readelf strip; do
-            sudo update-alternatives --install /usr/bin/llvm-${tool} llvm-${tool} /usr/bin/llvm-${tool}-${LLVM_VERSION} 100
+      - name: Fetch AOSP clang ${{ env.LLVM_VER }}
+        run: |
+          set -e
+          DEST="$GITHUB_WORKSPACE/toolchains/clang-${LLVM_VER}"
+          mkdir -p "$DEST"
+          URL_AOSP="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-${LLVM_VER}.tar.gz"
+          URL_MIRROR="https://github.com/jaymvictorino/clang-${LLVM_VER}-mirror/releases/download/v0.0.1/linux-x86-refs-heads-mirror-goog-main-llvm-toolchain-source-clang-${LLVM_VER}.tar.gz"
+          for url in "$URL_AOSP" "$URL_MIRROR"; do
+            echo "==> trying $url"
+            if curl -fL --retry 3 --retry-delay 5 --connect-timeout 30 -o clang.tar.gz "$url"; then
+              echo "==> extracting"
+              tar -xzf clang.tar.gz -C "$DEST" && rm -f clang.tar.gz && break
+            fi
+            rm -f clang.tar.gz
           done
+          test -x "$DEST/bin/clang" || { echo "!! could not fetch clang ${LLVM_VER}"; exit 1; }
+          "$DEST/bin/clang" --version | head -3
+          # all later steps see the pinned toolchain first on PATH
+          echo "$DEST/bin" >> "$GITHUB_PATH"
 
       - name: Verify toolchain
         run: |
-          echo "::group::Clang ${LLVM_VERSION}"
+          echo "::group::Clang ${LLVM_VER} (AOSP, Polly-enabled)"
           clang --version
           echo "::endgroup::"
           echo "::group::LLVM tools"
@@ -123,6 +131,12 @@ jobs:
           llvm-ar --version | head -1
           llvm-nm --version | head -1
           llvm-objcopy --version | head -1
+          echo "::endgroup::"
+          echo "::group::Polly sanity"
+          echo 'int a(int n){int s=0;for(int i=0;i<n;i++)s+=i;return s;}' > /tmp/polly.c
+          clang -O2 -mllvm -polly -c /tmp/polly.c -o /tmp/polly.o \
+            || { echo "::error::toolchain has no Polly support"; exit 1; }
+          echo "Polly accepted"
           echo "::endgroup::"
           echo "::group::Cross compilers"
           aarch64-linux-gnu-gcc --version | head -1
@@ -133,9 +147,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ccache
-          key: miatoll-ccache-${{ runner.os }}-${{ github.sha }}
+          key: miatoll-ccache-aosp-${{ env.LLVM_VER }}-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
-            miatoll-ccache-${{ runner.os }}-
+            miatoll-ccache-aosp-${{ env.LLVM_VER }}-${{ runner.os }}-
 
       - name: Generate and verify configuration
         run: |
@@ -298,6 +312,31 @@ jobs:
           # NoMount v2.1.0
           require 'CONFIG_NOMOUNT=y'
 
+          # Kinesis-steal pack (Saamitk/Kinesis@17): CASS scheduler, Oplus MM
+          # hacks, PELT-16, Polly + Clang LTO/ThinLTO + inline optimization,
+          # Shadow Call Stack, LZ4KD, Westwood, USB EHCI/OHCI, IR core
+          require 'CONFIG_SCHED_CASS=y'
+          require 'CONFIG_OPLUS_MM_HACKS=y'
+          require 'CONFIG_PELT_UTIL_HALFLIFE_16=y'
+          require 'CONFIG_LLVM_POLLY=y'
+          require 'CONFIG_LTO_CLANG=y'
+          require 'CONFIG_THINLTO=y'
+          require 'CONFIG_INLINE_OPTIMIZATION=y'
+          require 'CONFIG_SHADOW_CALL_STACK=y'
+          require 'CONFIG_CRYPTO_LZ4KD=y'
+          require 'CONFIG_KALLSYMS_ALL=y'
+          require 'CONFIG_TCP_CONG_WESTWOOD=y'
+          require 'CONFIG_USB_EHCI_HCD=y'
+          require 'CONFIG_USB_OHCI_HCD=y'
+          grep -q 'cass_select_task_rq_fair' kernel/sched/cass.c \
+            || { echo "::error::CASS scheduler missing"; exit 1; }
+          grep -q 'direct_vm_swappiness' mm/vmscan.c \
+            || { echo "::error::Oplus direct_swappiness hack missing"; exit 1; }
+          grep -q 'CONFIG_OPLUS_MM_HACKS' mm/zsmalloc.c \
+            || { echo "::error::Oplus zsmalloc hack missing"; exit 1; }
+          grep -q -- '-mllvm -polly' Makefile \
+            || { echo "::error::Polly build flags missing"; exit 1; }
+
           # Conservative 4 GB RAM profile: standard Android swap/accounting.
           require 'CONFIG_ZRAM=y'
           require 'CONFIG_ZRAM_DEDUP=y'
@@ -401,6 +440,11 @@ jobs:
           echo "  =m  : $(grep -c '=m' out/.config)"
           echo "::endgroup::"
 
+      - name: Audit root stack and stolen features
+        run: |
+          set -o pipefail
+          bash tools/root-integration/audit.sh "$PWD" 2>&1 | tee audit.log
+
       - name: Build kernel image only (preserve installed DTB/DTBO)
         run: |
           set -euo pipefail
@@ -415,7 +459,7 @@ jobs:
           set +e
           make -j"$(nproc)" O=out ARCH=arm64 \
             LLVM=1 LLVM_IAS=1 \
-            CC='ccache clang-22' HOSTCC='ccache clang-22' \
+            CC='ccache clang' HOSTCC='ccache clang' \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             KCFLAGS="-Wno-error" \
@@ -470,7 +514,7 @@ jobs:
           {
             echo "commit=${GITHUB_SHA}"
             echo "kernel.release=$(cat kernel.release)"
-            echo "toolchain=llvm-${LLVM_VERSION}"
+            echo "toolchain=aosp-clang-${LLVM_VER}"
             clang --version | head -1 | sed 's/^/clang.version=/'
             ld.lld --version | head -1 | sed 's/^/lld.version=/'
           } > build-info.txt
