@@ -17,9 +17,9 @@ rsync -a --exclude='.gitignore' --exclude='placeholder' AnyKernel3/ "$AK3/"
 # placed in this ZIP, so the installed device tree remains untouched.
 cp out/arch/arm64/boot/Image.gz "$AK3/"
 
-# Kernel modules (if any =m were built).
-mkdir -p "$AK3/modules/system/lib/modules"
-find out/ -name "*.ko" -exec cp {} "$AK3/modules/system/lib/modules/" \; 2>/dev/null || true
+# Kernel modules are intentionally NOT shipped: anykernel.sh sets
+# do.modules=0 and the release is kernel-only (Image.gz), so out/**/*.ko
+# must stay out of the package.
 
 # Keep ramdisk/ and patch/ dirs present (even if empty).
 mkdir -p "$AK3/ramdisk" "$AK3/patch"

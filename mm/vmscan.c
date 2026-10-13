@@ -156,8 +156,13 @@ struct scan_control {
 
 /*
  * From 0 .. 100.  Higher means more swappy.
+ *
+ * miatoll 4 GB profile: 100 (zram-first reclaim). Swap is ZRAM (LZ4 in
+ * RAM), so pushing inactive anon pages to swap is much cheaper than
+ * dropping file cache or killing apps; new memcgs inherit this value.
+ * Runtime knob: /proc/sys/vm/swappiness.
  */
-int vm_swappiness = 60;
+int vm_swappiness = 100;
 /*
  * The total number of pages which are beyond the high watermark within all
  * zones.

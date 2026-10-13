@@ -13,8 +13,9 @@
 #     panel) and the NoMount metamodule
 #   - Smooth-tuning pack baked into the kernel (no modules): touch-boost,
 #     schedutil/WALT defaults, GPU boot pwrlevel, conservative 4 GB memory
-#     profile (Android ZRAM + memcg/PSI; no KSM/THP/zswap layering),
-#     zram page-cluster 0, CFQ default + 256KB read-ahead
+#     profile (Android ZRAM + memcg/PSI; no KSM/THP/zswap/HugeTLB layering),
+#     zram-first vm.swappiness=100, zram page-cluster 0, CFQ default +
+#     256KB read-ahead
 #   - Haptics & sound: AW8624 high-priority vibrator workqueue, ALSA
 #     hrtimer backend, compress offload, USB audio, FF-memless
 name: Build & Release Stormbreaker Kernel
@@ -38,7 +39,8 @@ on:
         default: false
   push:
     branches:
-      - arena/7e8eb3ac-experiment-kernel
+      - a
+      - 'arena/**'
 
 permissions:
   contents: write
@@ -169,7 +171,7 @@ jobs:
             }
           }
           require_off() {
-            if grep -q "^${1}=y" out/.config; then
+            if grep -qE "^${1}=[ym]" out/.config; then
               echo "::error::Config must stay disabled: $1"
               exit 1
             fi
@@ -317,6 +319,8 @@ jobs:
           require_off 'CONFIG_PAGE_EXTENSION'
           require_off 'CONFIG_ZRAM_ENTROPY'
           require_off 'CONFIG_PSI_DEFAULT_DISABLED'
+          require_off 'CONFIG_HUGETLBFS'
+          require_off 'CONFIG_HUGETLB_PAGE'
 
           # Smooth-tuning pack: CFQ default for legacy queues
           # (UFS is blk-mq and auto-falls back to mq-deadline in
@@ -333,6 +337,8 @@ jobs:
             || { echo "::error::touch-boost freq defaults missing"; exit 1; }
           grep -q 'page_cluster = 0' mm/swap.c \
             || { echo "::error::zram page-cluster default missing"; exit 1; }
+          grep -q 'int vm_swappiness = 100' mm/vmscan.c \
+            || { echo "::error::zram-first swappiness default missing"; exit 1; }
           grep -q '1127' kernel/sched/fair.c \
             || { echo "::error::WALT capacity-margin default missing"; exit 1; }
           grep -q 'tunables->up_rate_limit_us = 500' kernel/sched/cpufreq_schedutil.c \
@@ -620,6 +626,8 @@ jobs:
           Device variants: Curtana / Gram / Joyeuse / Excalibur
 
           The installer flashes boot only; it does not include or flash a new DTB/DTBO. The installed ROM device tree remains unchanged. If /data is mounted, the installer attempts optional boot and DTBO backups under /sdcard.
+
+          Memory: conservative 4 GB profile — Android ZRAM (LZ4 + dedup) with memcg/PSI accounting, zram-first reclaim (vm.swappiness 100), one swap page per fault, 256 KB read-ahead. KSM, THP, zswap/frontswap and HugeTLB are disabled.
 
           KernelSU v3.3.0-79 uses UAPI v5 and must be paired with the included Manager. Upstream warns that existing KernelSU profiles may reset during this update; export important settings first.
 

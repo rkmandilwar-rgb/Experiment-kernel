@@ -27,6 +27,9 @@ frags=(
     kernel/configs/miatoll/bbr.config
     kernel/configs/miatoll/droidspaces.config
     kernel/configs/miatoll/nethunter.config
+    # 4 GB stability/tuning policy — merged LAST so it is the final word
+    # on memory/tuning symbols even if a feature fragment drifts.
+    kernel/configs/miatoll/tuning.config
 )
 
 echo "merge-defconfig.sh"
@@ -36,7 +39,9 @@ echo "  frags : ${#frags[@]} fragment(s)"
 count=0
 for f in "${frags[@]}"; do
     [ -f "$f" ] || { echo "SKIP $f (not found)"; continue; }
-    while IFS= read -r line; do
+    # "|| [ -n \"$line\" ]" keeps the last line when the fragment has no
+    # trailing newline (otherwise that option would be silently dropped).
+    while IFS= read -r line || [ -n "$line" ]; do
         [ -z "$line" ] && continue
         case "$line" in
             '#'*' is not set')
