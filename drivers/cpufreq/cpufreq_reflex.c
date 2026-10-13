@@ -41,7 +41,6 @@
  */
 
 #include <linux/cpufreq.h>
-#include <linux/energy_model.h>
 #include <linux/init.h>
 #include <linux/irq_work.h>
 #include <linux/kthread.h>
