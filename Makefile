@@ -705,10 +705,12 @@ export CFLAGS_GCOV
 # ar/cc/ld-* macros return correct values.
 ifdef CONFIG_LTO_CLANG
 ifneq ($(ld-name),lld)
+ifneq (,$(LDGOLD))
 # use GNU gold with LLVMgold for LTO linking, and LD for vmlinux_link
 LDFINAL_vmlinux := $(LD)
 LD		:= $(LDGOLD)
 LDFLAGS		+= -plugin LLVMgold.so
+endif
 endif
 # use llvm-ar for building symbol tables from IR files, and llvm-dis instead
 # of objdump for processing symbol versions and exports
@@ -1355,7 +1357,10 @@ clang-specific-configs := LTO_CLANG CFI_CLANG SHADOW_CALL_STACK INIT_STACK_ALL_Z
 
 PHONY += check-clang-specific-options
 check-clang-specific-options: $(KCONFIG_CONFIG) FORCE
-ifneq ($(cc-name),clang)
+# Only strip when we KNOW the compiler is gcc. A missing/odd $(CC) probe
+# (ccache wrappers, PATH shims) must never silently disable LTO/SCS: a
+# failed version probe is not evidence of a gcc build.
+ifeq ($(cc-name),gcc)
 ifneq ($(findstring y,$(shell $(CONFIG_SHELL) \
 	$(srctree)/scripts/config --file $(KCONFIG_CONFIG) \
 		$(foreach c,$(clang-specific-configs),-s $(c)))),)

@@ -460,17 +460,28 @@ jobs:
           make -j"$(nproc)" O=out ARCH=arm64 \
             LLVM=1 LLVM_IAS=1 \
             CC='ccache clang' HOSTCC='ccache clang' \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump \
+            READELF=llvm-readelf STRIP=llvm-strip \
+            HOSTLD=ld.lld HOSTAR=llvm-ar \
             KCFLAGS="-Wno-error" \
             Image.gz > build.log 2>&1
           status=$?
           set -e
 
           if [ "$status" -ne 0 ]; then
-            grep -E ' error:|fatal error:' build.log | sed 's/\r$//' | awk '!seen[$0]++' \
+            grep -E ' error:|fatal error:|Error [0-9]+|Killed|not found' build.log | sed 's/\r$//' | awk '!seen[$0]++' \
               | cut -c1-200 > build-errors.txt || true
             total=$(wc -l < build-errors.txt)
+            # If the pattern matched nothing, surface the tail so the
+            # failure is never reported as "0 distinct errors".
+            if [ "$total" -eq 0 ]; then
+              tail -30 build.log | sed 's/\r$//' | cut -c1-200 > build-errors.txt || true
+              total=$(wc -l < build-errors.txt)
+            fi
             # Emit each error as a GitHub annotation (visible in API)
             while IFS= read -r line; do
               echo "::error::$line"
