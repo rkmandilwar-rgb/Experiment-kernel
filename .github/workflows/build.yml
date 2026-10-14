@@ -292,6 +292,20 @@ jobs:
           grep -q 'FAKE_UNAME_5_10' kernel/sys.c \
             || { echo "::error::uname spoof for the BPF loaders missing"; exit 1; }
 
+          # Kinesis parity options: suspend path, tethering/TTL helpers, the
+          # Android quota2 logger, the HMARK marker and msdos FAT tooling.
+          require 'CONFIG_SUSPEND_SKIP_SYNC=y'
+          require 'CONFIG_NETFILTER_XT_TARGET_HMARK=y'
+          require 'CONFIG_NETFILTER_XT_MATCH_QUOTA2_LOG=y'
+          require 'CONFIG_IP_NF_TARGET_TTL=y'
+          require 'CONFIG_IP6_NF_TARGET_HL=y'
+          require 'CONFIG_MSDOS_FS=y'
+          # EROFS: the fragment enables the filesystem; these make sure the
+          # compressed (LZ4) reader that came with the port is really in.
+          require 'CONFIG_EROFS_FS=y'
+          require 'CONFIG_EROFS_FS_ZIP=y'
+          require 'CONFIG_LZ4_DECOMPRESS=y'
+
           # Haptics & sound pack
           require 'CONFIG_SND_PCM_TIMER=y'
           require 'CONFIG_SND_DYNAMIC_MINORS=y'
