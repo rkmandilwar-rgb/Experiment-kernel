@@ -87,7 +87,8 @@
 	((1UL << LZ4_MEMORY_USAGE) + \
 	 32) /* static size, for inter-version compatibility */
 
-#define LZ4_STREAMHCSIZE_SIZET (262192 / sizeof(size_t))
+#define LZ4_STREAMHCSIZE        262192
+#define LZ4_STREAMHCSIZE_SIZET (LZ4_STREAMHCSIZE / sizeof(size_t))
 
 /*! LZ4_stream_t :
  *  Never ever use below internal definitions directly !
