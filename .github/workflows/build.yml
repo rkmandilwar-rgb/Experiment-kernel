@@ -274,6 +274,24 @@ jobs:
           grep -q 'config INLINE_OPTIMIZATION' init/Kconfig \
             || { echo "::error::INLINE_OPTIMIZATION Kconfig option missing"; exit 1; }
 
+          # Kinesis ports: uname spoof, BPF helper, CASS, TEO, LZ4KD, ramdisk
+          require 'CONFIG_FAKE_UNAME_5_10=y'
+          require 'CONFIG_SCHED_CASS=y'
+          require 'CONFIG_CPU_IDLE_GOV_TEO=y'
+          require 'CONFIG_RD_XZ=y'
+          require 'CONFIG_RD_LZO=y'
+          require 'CONFIG_RD_LZ4=y'
+          require 'CONFIG_CRYPTO_LZ4KD=y'
+          require 'CONFIG_LZ4KD_COMPRESS=y'
+          require 'CONFIG_LZ4KD_DECOMPRESS=y'
+          require 'CONFIG_KERNEL_MODE_NEON=y'
+          grep -q 'bpf_trace_printk_dummy' kernel/bpf/core.c \
+            || { echo "::error::dummy bpf_trace_printk helper missing"; exit 1; }
+          grep -q 'cass_select_task_rq_fair' kernel/sched/cass.c \
+            || { echo "::error::CASS scheduler source missing"; exit 1; }
+          grep -q 'FAKE_UNAME_5_10' kernel/sys.c \
+            || { echo "::error::uname spoof for the BPF loaders missing"; exit 1; }
+
           # Haptics & sound pack
           require 'CONFIG_SND_PCM_TIMER=y'
           require 'CONFIG_SND_DYNAMIC_MINORS=y'
