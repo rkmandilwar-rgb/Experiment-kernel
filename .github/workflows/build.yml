@@ -362,6 +362,18 @@ jobs:
           grep -q 'min_free_pages' drivers/android/simple_lmk.c \
             || { echo "::error::SLMK per-RAM minfree scaling missing"; exit 1; }
 
+          # SUSFS hardening contract: full kallsyms masking, AVC log
+          # spoofing that only rewrites KernelSU denials, and profile-aware
+          # umount marking.
+          grep -q 'susfs_starts_with(iter->name, "is_zygote")' kernel/kallsyms.c \
+            || { echo "::error::kallsyms SUSFS symbol filter is incomplete"; exit 1; }
+          grep -q 'susfs_ksu_sid' security/selinux/avc.c \
+            || { echo "::error::AVC log spoofing must rewrite KSU denials"; exit 1; }
+          grep -q 'ksu_uid_should_umount' drivers/kernelsu/hook/setuid_hook.c \
+            || { echo "::error::umount marking must be profile-aware"; exit 1; }
+          require 'CONFIG_KSU_SUSFS=y'
+          require 'CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y'
+
           # Conservative 4 GB RAM profile: standard Android swap path.
           require 'CONFIG_ZRAM=y'
           require 'CONFIG_ZRAM_DEDUP=y'
@@ -692,17 +704,28 @@ jobs:
           fi
 
           cat > release-notes.md << EOF
-          # Stormbreaker Kernel — Xiaomi Miatoll
+          # Stormbreaker Kernel — Xiaomi Miatoll (build ${GITHUB_RUN_NUMBER})
 
-          Build: ${GITHUB_RUN_NUMBER}
-          Source commit: ${GITHUB_SHA}
-          Kernel: 4.14.357-openela
-          KernelSU driver: backslashxx v3.3.1 (32676; UAPI v5)
+          Kernel: 4.14.357-openela · KernelSU driver: backslashxx v3.3.1 (32676; UAPI v5)
           Device variants: Curtana / Gram / Joyeuse / Excalibur
+
+          ## What's new
+
+          - Simple LMK replaces the userspace memory killer (kernel-side, upstream design)
+              - reclaim target scales per device: 176 MiB (4 GB) / 245 MiB (6 GB) / 320 MiB (8 GB)
+              - 100 ms victim-reap timeout, vmpressure trigger at >= 98
+          - Bluetooth: QCA UART transport for the internal WCN3990, Broadcom/Realtek USB support, HIDP + BNEP
+          - Wi-Fi: vendor regulatory database built in (no CRDA daemon needed)
+          - SUSFS: /proc/kallsyms now hides the full KernelSU/SUSFS symbol set (was only 3 prefixes)
+          - SUSFS: AVC log spoofing rewrites only KernelSU denials instead of dropping every SELinux denial
+          - SUSFS: umount marking is profile-aware — only apps that were really umounted get the hidden view
+          - Misc: bug fixes and small cleanups
+
+          ## Notes
 
           The installer flashes boot only; it does not include or flash a new DTB/DTBO. The installed ROM device tree remains unchanged. If /data is mounted, the installer attempts optional boot and DTBO backups under /sdcard.
 
-          Memory: conservative 4 GB profile — Android ZRAM (LZ4 + dedup) with memcg/PSI accounting, zram-first reclaim (vm.swappiness 100), one swap page per fault, 256 KB read-ahead. KSM, THP, zswap/frontswap and HugeTLB are disabled.
+          Memory: conservative profile — Android ZRAM (LZ4 + dedup) with Simple LMK (PSI and MEMCG intentionally off, as the driver requires), zram-first reclaim (vm.swappiness 100), one swap page per fault, 256 KB read-ahead. KSM, THP, zswap/frontswap and HugeTLB are disabled.
 
           KernelSU v3.3.1 uses UAPI v5 and must be paired with the included Manager (KernelSU_v3.3.1_32680). Upstream warns that existing KernelSU profiles may reset during this update; export important settings first.
 

@@ -25,8 +25,18 @@ static __always_inline void ksu_handle_setresuid_cred(struct cred *new, const st
 		goto kill_seccomp;
 
 #ifdef CONFIG_KSU_SUSFS
-	is_susfs_app = is_appuid(new_uid) || is_isolated_process(new_uid) ||
-		       new_uid == WEBVIEW_ZYGOTE_UID;
+	extern bool ksu_uid_should_umount(uid_t uid);
+
+	/*
+	 * Mark a process as umounted only when it really is: isolated
+	 * services always, app/webview-zygote uids only when their profile
+	 * has module unmounting enabled. The mark drives the mountinfo/
+	 * fdinfo/stat hiding paths, so marking non-umounted apps would
+	 * hide mounts that are still present.
+	 */
+	is_susfs_app = is_isolated_process(new_uid) ||
+		       ((is_appuid(new_uid) || new_uid == WEBVIEW_ZYGOTE_UID) &&
+			ksu_uid_should_umount(new_uid));
 
 	if (is_susfs_app)
 		susfs_set_current_proc_umounted();

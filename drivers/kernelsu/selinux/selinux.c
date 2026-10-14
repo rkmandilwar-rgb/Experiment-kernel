@@ -16,6 +16,17 @@ static u32 cached_init_sid __read_mostly = 0;
 static u32 cached_adbd_sid __read_mostly = 0;
 u32 ksu_file_sid __read_mostly = 0;
 
+#ifdef CONFIG_KSU_SUSFS
+/*
+ * SIDs used by the SUSFS AVC log spoofer (security/selinux/avc.c).
+ * Mirrors upstream kernel/selinux/selinux.c so the spoofer can match
+ * KernelSU-domain denials without KSU-private headers.
+ */
+#define KERNEL_PRIV_APP_DOMAIN "u:r:priv_app:s0:c512,c768"
+u32 susfs_ksu_sid __read_mostly = 0;
+u32 susfs_priv_app_sid __read_mostly = 0;
+#endif
+
 static int transive_to_domain(const char *domain, struct cred *cred, bool clear_exec_sid)
 {
 	u32 sid;
@@ -133,6 +144,19 @@ void cache_sid(void)
 	} else {
 		pr_info("Cached su SID: %u\n", cached_su_sid);
 	}
+
+#ifdef CONFIG_KSU_SUSFS
+	susfs_ksu_sid = cached_su_sid;
+	err = security_secctx_to_secid(KERNEL_PRIV_APP_DOMAIN,
+				       strlen(KERNEL_PRIV_APP_DOMAIN),
+				       &susfs_priv_app_sid);
+	if (err) {
+		pr_warn("Failed to cache priv_app domain SID: %d\n", err);
+		susfs_priv_app_sid = 0;
+	} else {
+		pr_info("Cached priv_app SID: %u\n", susfs_priv_app_sid);
+	}
+#endif
 
 	err = security_secctx_to_secid(ZYGOTE_CONTEXT, strlen(ZYGOTE_CONTEXT), &cached_zygote_sid);
 	if (err) {

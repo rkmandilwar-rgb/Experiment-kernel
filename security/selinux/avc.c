@@ -44,6 +44,12 @@
 #define avc_cache_stats_incr(field)	do {} while (0)
 #endif
 
+#ifdef CONFIG_KSU_SUSFS
+extern bool susfs_is_avc_log_spoofing_enabled;
+extern u32 susfs_ksu_sid;
+extern u32 susfs_priv_app_sid;
+#endif
+
 struct avc_entry {
 	u32			ssid;
 	u32			tsid;
@@ -187,6 +193,23 @@ static void avc_dump_query(struct audit_buffer *ab, struct selinux_state *state,
 	}
 
 	rc = security_sid_to_context(state, tsid, &scontext, &scontext_len);
+#ifdef CONFIG_KSU_SUSFS
+	/*
+	 * SUSFS AVC log spoofing (upstream v2.3.0 behaviour): rewrite only
+	 * denials whose target domain is the KernelSU domain. Every other
+	 * SELinux denial keeps logging normally; blanket suppression hid
+	 * meaningful audit records and was itself a detectable tell.
+	 */
+	if (unlikely(susfs_is_avc_log_spoofing_enabled && tsid == susfs_ksu_sid)) {
+		if (rc)
+			audit_log_format(ab, " tsid=%d", susfs_priv_app_sid);
+		else {
+			audit_log_format(ab, " tcontext=%s",
+					 "u:r:priv_app:s0:c512,c768");
+			kfree(scontext);
+		}
+	} else
+#endif
 	if (rc)
 		audit_log_format(ab, " tsid=%d", tsid);
 	else {
@@ -768,10 +791,6 @@ static void avc_audit_post_callback(struct audit_buffer *ab, void *a)
 }
 
 
-#ifdef CONFIG_KSU_SUSFS
-extern bool susfs_is_avc_log_spoofing_enabled;
-#endif
-
 /* This is the slow part of avc audit with big stack footprint */
 noinline int slow_avc_audit(struct selinux_state *state,
 			    u32 ssid, u32 tsid, u16 tclass,
@@ -781,11 +800,6 @@ noinline int slow_avc_audit(struct selinux_state *state,
 {
 	struct common_audit_data stack_data;
 	struct selinux_audit_data sad;
-
-#ifdef CONFIG_KSU_SUSFS
-	if (unlikely(susfs_is_avc_log_spoofing_enabled))
-		return 0;
-#endif
 
 	if (!a) {
 		a = &stack_data;

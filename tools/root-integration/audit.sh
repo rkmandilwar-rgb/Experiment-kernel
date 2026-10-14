@@ -37,6 +37,14 @@ grep -q "EVENT_POST_FS_DATA" drivers/kernelsu/supercall/dispatch.c && ok "dispat
 grep -q "susfs_is_current_ksu_domain" drivers/kernelsu/selinux/selinux.c && ok "selinux ksu-domain check" || fail "selinux ksu-domain check missing"
 grep -q "susfs_extra_works" drivers/kernelsu/hook/setuid_hook.c && ok "setuid umount glue" || fail "setuid umount glue missing"
 
+echo "== SUSFS hardening"
+grep -q 'susfs_starts_with(iter->name, "is_zygote")' kernel/kallsyms.c \
+  && ok "kallsyms hides the full KSU/SUSFS symbol set" || fail "kallsyms symbol filter incomplete"
+grep -q 'susfs_ksu_sid' security/selinux/avc.c \
+  && ok "AVC log spoofing targets KSU denials only" || fail "AVC log spoofing missing"
+grep -q 'ksu_uid_should_umount' drivers/kernelsu/hook/setuid_hook.c \
+  && ok "umount marking is profile-aware" || fail "umount marking not profile-aware"
+
 # every extern the susfs core asks from the KSU driver must exist somewhere
 echo "== cross-module symbols required by fs/susfs.c"
 MISSING=""
