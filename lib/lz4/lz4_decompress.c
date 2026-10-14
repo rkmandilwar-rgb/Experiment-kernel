@@ -926,6 +926,23 @@ int LZ4_decompress_safe_partial(const char *src, char *dst, int compressedSize,
 				      0);
 }
 
+/*
+ * Legacy entry point, still used by the legacy ramdisk frame format in
+ * lib/decompress_unlz4.c (where the size of the compressed payload is not
+ * recorded, so only the "unsafe" decoder can be used).
+ *
+ * It presumes the input is correctly formed, does not know the input size and
+ * decodes exactly one full block.  Return: number of bytes read from the
+ * source buffer, or a negative value on failure.
+ */
+int LZ4_decompress_fast(const char *source, char *dest, int originalSize)
+{
+	return LZ4_decompress_unsafe_generic((const BYTE *)source,
+					     (BYTE *)dest, originalSize,
+					     0, NULL, 0);
+}
+EXPORT_SYMBOL(LZ4_decompress_fast);
+
 /* ===== Instantiate a few more decoding cases, used more than once. ===== */
 
 int LZ4_decompress_safe_withPrefix64k(const char *source, char *dest,

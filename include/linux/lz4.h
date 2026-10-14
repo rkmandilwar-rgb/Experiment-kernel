@@ -575,7 +575,7 @@ int LZ4_decompress_safe_continue(LZ4_streamDecode_t *LZ4_streamDecode,
  *	or a negative result if decompression fails.
  */
 
-//int LZ4_decompress_fast(const char *source, char *dest, int originalSize);
+int LZ4_decompress_fast(const char *source, char *dest, int originalSize);
 
 /**
  * LZ4_decompress_fast_continue() - Decompress blocks in streaming mode
