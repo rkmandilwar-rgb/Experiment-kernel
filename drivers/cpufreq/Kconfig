@@ -111,15 +111,6 @@ config CPU_FREQ_DEFAULT_GOV_SCHEDUTIL
 	  have a look at the help section of that governor. The fallback
 	  governor will be 'performance'.
 
-config CPU_FREQ_DEFAULT_GOV_REFLEX
-	bool "reflex"
-	depends on CPU_FREQ_GOV_REFLEX
-	select CPU_FREQ_GOV_PERFORMANCE
-	help
-	  Use the 'reflex' CPUFreq governor by default. If unsure,
-	  have a look at the help section of that governor. The fallback
-	  governor will be 'performance'.
-
 config CPU_FREQ_DEFAULT_GOV_INTERACTIVE
 	bool "interactive"
 	select CPU_FREQ_GOV_INTERACTIVE
@@ -236,20 +227,6 @@ config CPU_FREQ_GOV_SCHEDUTIL
 	  case, it is proportional to the current frequency of the CPU.  The
 	  frequency tipping point is at utilization/capacity equal to 80% in
 	  both cases.
-
-	  If in doubt, say N.
-
-config CPU_FREQ_GOV_REFLEX
-	bool "'reflex' cpufreq policy governor"
-	depends on CPU_FREQ && SMP
-	select CPU_FREQ_GOV_ATTR_SET
-	select IRQ_WORK
-	help
-	  Reflex is schedutil plus a measured fast path for rising load: it
-	  gets bursts that follow an idle up to speed within one scheduler
-	  tick instead of waiting for PELT to ramp up.  Per-CPU demand is
-	  measured over closed intervals and a latency_weight tunable trades
-	  latency for energy through an efficiency floor.
 
 	  If in doubt, say N.
 

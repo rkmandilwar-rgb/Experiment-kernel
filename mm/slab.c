@@ -100,7 +100,6 @@
 #include	<linux/seq_file.h>
 #include	<linux/notifier.h>
 #include	<linux/kallsyms.h>
-#include	<linux/kfence.h>
 #include	<linux/cpu.h>
 #include	<linux/sysctl.h>
 #include	<linux/module.h>
@@ -3298,27 +3297,17 @@ must_grow:
 }
 
 static __always_inline void *
-slab_alloc_node(struct kmem_cache *cachep, gfp_t flags, int nodeid, size_t orig_size,
+slab_alloc_node(struct kmem_cache *cachep, gfp_t flags, int nodeid,
 		   unsigned long caller)
 {
 	unsigned long save_flags;
 	void *ptr;
 	int slab_node = numa_mem_id();
-	struct kmem_cache *orig_cachep = cachep;
 
 	flags &= gfp_allowed_mask;
 	cachep = slab_pre_alloc_hook(cachep, flags);
 	if (unlikely(!cachep))
 		return NULL;
-
-	/*
-	 * 5.4 note: passing in original cachep to avoid problems with memcg
-	 * accounting. Making KFENCE properly work with memcgs on older kernels
-	 * is not worth the effort.
-	 */
-	ptr = kfence_alloc(orig_cachep, orig_size, flags);
-	if (unlikely(ptr))
-		goto out_hooks;
 
 	cache_alloc_debugcheck_before(cachep, flags);
 	local_irq_save(save_flags);
@@ -3352,7 +3341,6 @@ slab_alloc_node(struct kmem_cache *cachep, gfp_t flags, int nodeid, size_t orig_
 	if (unlikely(slab_want_init_on_alloc(flags, cachep)) && ptr)
 		memset(ptr, 0, cachep->object_size);
 
-out_hooks:
 	slab_post_alloc_hook(cachep, flags, 1, &ptr);
 	return ptr;
 }
@@ -3390,25 +3378,15 @@ __do_cache_alloc(struct kmem_cache *cachep, gfp_t flags)
 #endif /* CONFIG_NUMA */
 
 static __always_inline void *
-slab_alloc(struct kmem_cache *cachep, gfp_t flags, size_t orig_size, unsigned long caller)
+slab_alloc(struct kmem_cache *cachep, gfp_t flags, unsigned long caller)
 {
 	unsigned long save_flags;
 	void *objp;
-	struct kmem_cache *orig_cachep = cachep;
 
 	flags &= gfp_allowed_mask;
 	cachep = slab_pre_alloc_hook(cachep, flags);
 	if (unlikely(!cachep))
 		return NULL;
-
-	/*
-	 * 5.4 note: passing in original cachep to avoid problems with memcg
-	 * accounting. Making KFENCE properly work with memcgs on older kernels
-	 * is not worth the effort.
-	 */
-	objp = kfence_alloc(orig_cachep, orig_size, flags);
-	if (unlikely(objp))
-		goto out;
 
 	cache_alloc_debugcheck_before(cachep, flags);
 	local_irq_save(save_flags);
@@ -3420,7 +3398,6 @@ slab_alloc(struct kmem_cache *cachep, gfp_t flags, size_t orig_size, unsigned lo
 	if (unlikely(slab_want_init_on_alloc(flags, cachep)) && objp)
 		memset(objp, 0, cachep->object_size);
 
-out:
 	slab_post_alloc_hook(cachep, flags, 1, &objp);
 	return objp;
 }
@@ -3526,12 +3503,6 @@ free_done:
 static __always_inline void __cache_free(struct kmem_cache *cachep, void *objp,
 					 unsigned long caller)
 {
-	if (is_kfence_address(objp)) {
-		kmemleak_free_recursive(objp, cachep->flags);
-		__kfence_free(objp);
-		return;
-	}
-
 	/* Put the object into the quarantine, don't touch it for now. */
 	if (kasan_slab_free(cachep, objp, _RET_IP_))
 		return;
@@ -3589,7 +3560,7 @@ void ___cache_free(struct kmem_cache *cachep, void *objp,
  */
 void *kmem_cache_alloc(struct kmem_cache *cachep, gfp_t flags)
 {
-	void *ret = slab_alloc(cachep, flags, cachep->object_size, _RET_IP_);
+	void *ret = slab_alloc(cachep, flags, _RET_IP_);
 
 	trace_kmem_cache_alloc(_RET_IP_, ret,
 			       cachep->object_size, cachep->size, flags);
@@ -3612,7 +3583,6 @@ int kmem_cache_alloc_bulk(struct kmem_cache *s, gfp_t flags, size_t size,
 			  void **p)
 {
 	size_t i;
-	struct kmem_cache *root_s = s;
 
 	s = slab_pre_alloc_hook(s, flags);
 	if (!s)
@@ -3622,13 +3592,7 @@ int kmem_cache_alloc_bulk(struct kmem_cache *s, gfp_t flags, size_t size,
 
 	local_irq_disable();
 	for (i = 0; i < size; i++) {
-		/*
-		 * 5.4 note: passing in original cachep to avoid problems with
-		 * memcg accounting. Making KFENCE properly work with memcgs on
-		 * older kernels is not worth the effort.
-		 */
-		void *objp = kfence_alloc(root_s, s->object_size, flags) ?:
-					  __do_cache_alloc(s, flags);
+		void *objp = __do_cache_alloc(s, flags);
 
 		if (unlikely(!objp))
 			goto error;
@@ -3661,7 +3625,7 @@ kmem_cache_alloc_trace(struct kmem_cache *cachep, gfp_t flags, size_t size)
 {
 	void *ret;
 
-	ret = slab_alloc(cachep, flags, size, _RET_IP_);
+	ret = slab_alloc(cachep, flags, _RET_IP_);
 
 	ret = kasan_kmalloc(cachep, ret, size, flags);
 	trace_kmalloc(_RET_IP_, ret,
@@ -3685,7 +3649,7 @@ EXPORT_SYMBOL(kmem_cache_alloc_trace);
  */
 void *kmem_cache_alloc_node(struct kmem_cache *cachep, gfp_t flags, int nodeid)
 {
-	void *ret = slab_alloc_node(cachep, flags, nodeid, cachep->object_size, _RET_IP_);
+	void *ret = slab_alloc_node(cachep, flags, nodeid, _RET_IP_);
 
 	trace_kmem_cache_alloc_node(_RET_IP_, ret,
 				    cachep->object_size, cachep->size,
@@ -3703,7 +3667,7 @@ void *kmem_cache_alloc_node_trace(struct kmem_cache *cachep,
 {
 	void *ret;
 
-	ret = slab_alloc_node(cachep, flags, nodeid, size, _RET_IP_);
+	ret = slab_alloc_node(cachep, flags, nodeid, _RET_IP_);
 
 	ret = kasan_kmalloc(cachep, ret, size, flags);
 	trace_kmalloc_node(_RET_IP_, ret,
@@ -3762,7 +3726,7 @@ static __always_inline void *__do_kmalloc(size_t size, gfp_t flags,
 	cachep = kmalloc_slab(size, flags);
 	if (unlikely(ZERO_OR_NULL_PTR(cachep)))
 		return cachep;
-	ret = slab_alloc(cachep, flags, size, caller);
+	ret = slab_alloc(cachep, flags, caller);
 
 	ret = kasan_kmalloc(cachep, ret, size, flags);
 	trace_kmalloc(caller, ret,
@@ -4476,10 +4440,7 @@ const char *__check_heap_object(const void *ptr, unsigned long n,
 	BUG_ON(objnr >= cachep->num);
 
 	/* Find offset within object. */
-	if (is_kfence_address(ptr))
-		offset = ptr - kfence_object_start(ptr);
-	else
-		offset = ptr - index_to_obj(cachep, page, objnr) - obj_offset(cachep);
+	offset = ptr - index_to_obj(cachep, page, objnr) - obj_offset(cachep);
 
 	/* Allow address range falling entirely within object size. */
 	if (offset <= cachep->object_size && n <= cachep->object_size - offset)
@@ -4509,7 +4470,7 @@ size_t ksize(const void *objp)
 	if (unlikely(objp == ZERO_SIZE_PTR))
 		return 0;
 
-	size = kfence_ksize(objp) ?: virt_to_cache(objp)->object_size;
+	size = virt_to_cache(objp)->object_size;
 	/* We assume that ksize callers could use the whole allocated area,
 	 * so we need to unpoison this area.
 	 */

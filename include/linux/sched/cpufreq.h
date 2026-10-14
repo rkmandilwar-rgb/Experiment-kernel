@@ -31,15 +31,4 @@ void cpufreq_add_update_util_hook(int cpu, struct update_util_data *data,
 void cpufreq_remove_update_util_hook(int cpu);
 #endif /* CONFIG_CPU_FREQ */
 
-/* Helpers for cpufreq governors outside of this file (e.g. Reflex). */
-struct cpufreq_policy;
-bool cpufreq_this_cpu_can_update(struct cpufreq_policy *policy);
-unsigned long cpufreq_get_capacity_ref_freq(struct cpufreq_policy *policy);
-void cpufreq_get_effective_util(int cpu, unsigned long boost,
-				unsigned long *out_util,
-				unsigned long *out_bw_min,
-				unsigned long *out_bw_max);
-bool cpufreq_cpu_dl_bw_exceeded(int cpu, unsigned long bw_min);
-u64 cpufreq_pelt_decay(u64 val, u64 delta_ns);
-
 #endif /* _LINUX_SCHED_CPUFREQ_H */

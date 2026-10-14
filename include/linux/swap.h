@@ -14,11 +14,6 @@
 #include <linux/page-flags.h>
 #include <asm/page.h>
 
-#if defined(CONFIG_NANDSWAP)
-#include <linux/nandswap.h>
-#define SWAP_NANDSWAP_PRIO	2020	/* just a magic number */
-#endif
-
 struct notifier_block;
 
 struct bio;
@@ -133,10 +128,6 @@ union swap_header {
  */
 struct reclaim_state {
 	unsigned long reclaimed_slab;
-#ifdef CONFIG_LRU_GEN
-	/* per-thread mm walk data */
-	struct lru_gen_mm_walk *mm_walk;
-#endif
 };
 
 #ifdef __KERNEL__
@@ -182,12 +173,7 @@ enum {
 	SWP_STABLE_WRITES = (1 << 10),	/* no overwrite PG_writeback pages */
 	SWP_SYNCHRONOUS_IO = (1 << 11),	/* synchronous IO is efficient */
 					/* add others here before... */
-#if defined(CONFIG_NANDSWAP)
-	SWP_NANDSWAP	= (1 << 12),	/* mark the device used for nandswap */
-	SWP_SCANNING	= (1 << 13),	/* refcount in scan_swap_map */
-#else
 	SWP_SCANNING	= (1 << 12),	/* refcount in scan_swap_map */
-#endif
 };
 
 #define SWAP_CLUSTER_MAX 32UL
@@ -422,12 +408,9 @@ extern unsigned long total_swapcache_pages(void);
 extern void show_swap_cache_info(void);
 extern int add_to_swap(struct page *page);
 extern int add_to_swap_cache(struct page *, swp_entry_t, gfp_t);
-extern int __add_to_swap_cache(struct page *page, swp_entry_t entry,
-			void **shadowp);
-extern void __delete_from_swap_cache(struct page *page, void *shadow);
+extern int __add_to_swap_cache(struct page *page, swp_entry_t entry);
+extern void __delete_from_swap_cache(struct page *);
 extern void delete_from_swap_cache(struct page *);
-extern void clear_shadow_from_swap_cache(int type, unsigned long begin,
-				unsigned long end);
 extern void free_page_and_swap_cache(struct page *);
 extern void free_pages_and_swap_cache(struct page **, int);
 extern struct page *lookup_swap_cache(swp_entry_t entry,
@@ -580,16 +563,11 @@ static inline int add_to_swap_cache(struct page *page, swp_entry_t entry,
 	return -1;
 }
 
-static inline void __delete_from_swap_cache(struct page *page, void *shadow)
+static inline void __delete_from_swap_cache(struct page *page)
 {
 }
 
 static inline void delete_from_swap_cache(struct page *page)
-{
-}
-
-static inline void clear_shadow_from_swap_cache(int type, unsigned long begin,
-				unsigned long end)
 {
 }
 

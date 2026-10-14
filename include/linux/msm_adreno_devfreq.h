@@ -32,13 +32,6 @@ struct xstats {
 	int mod;
 };
 
-/* simple_gpu_algorithm.c: optional simplified level decision for the
- * msm_adreno_tz governor.  Runtime toggle: simple_gpu_activate=1. */
-extern int simple_gpu_active;
-struct devfreq_msm_adreno_tz_data;
-int simple_gpu_algorithm(int level, int max_level,
-		struct devfreq_msm_adreno_tz_data *priv);
-
 struct devfreq_msm_adreno_tz_data {
 	struct notifier_block nb;
 	struct {
