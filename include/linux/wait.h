@@ -583,6 +583,66 @@ do {										\
 	__ret;									\
 })
 
+/*
+ * wait_event_idle / wait_event_idle_timeout - wait without contributing to
+ * system load (TASK_IDLE). Backported from newer upstream kernels (needed by
+ * the KFENCE allocation-gate timer).
+ */
+#define __wait_event_idle(wq_head, condition)					\
+	___wait_event(wq_head, condition, TASK_IDLE, 0, 0, schedule())
+
+/**
+ * wait_event_idle - wait for a condition without contributing to system load
+ * @wq_head: the waitqueue to wait on
+ * @condition: a C expression for the event to wait for
+ *
+ * The process is put to sleep (TASK_IDLE) until the
+ * @condition evaluates to true.
+ * The @condition is checked each time the waitqueue @wq_head is woken up.
+ *
+ * wake_up() has to be called after changing any variable that could
+ * change the result of the wait condition.
+ */
+#define wait_event_idle(wq_head, condition)					\
+do {										\
+	might_sleep();								\
+	if (!(condition))							\
+		__wait_event_idle(wq_head, condition);				\
+} while (0)
+
+#define __wait_event_idle_timeout(wq_head, condition, timeout)			\
+	___wait_event(wq_head, ___wait_cond_timeout(condition),			\
+		      TASK_IDLE, 0, timeout,					\
+		      __ret = schedule_timeout(__ret))
+
+/**
+ * wait_event_idle_timeout - sleep without load until a condition becomes true
+ *			     or a timeout elapses
+ * @wq_head: the waitqueue to wait on
+ * @condition: a C expression for the event to wait for
+ * @timeout: timeout, in jiffies
+ *
+ * The process is put to sleep (TASK_IDLE) until the
+ * @condition evaluates to true. The @condition is checked each time
+ * the waitqueue @wq_head is woken up.
+ *
+ * wake_up() has to be called after changing any variable that could
+ * change the result of the wait condition.
+ *
+ * Returns: 0 if the @condition evaluated to false after the timeout elapsed,
+ * 1 if the @condition evaluated to true after the timeout elapsed, or the
+ * remaining jiffies (at least 1) if the @condition evaluated to true before
+ * the timeout elapsed.
+ */
+#define wait_event_idle_timeout(wq_head, condition, timeout)			\
+({										\
+	long __ret = timeout;							\
+	might_sleep();								\
+	if (!___wait_cond_timeout(condition))					\
+		__ret = __wait_event_idle_timeout(wq_head, condition, timeout);\
+	__ret;									\
+})
+
 #define __wait_event_interruptible_exclusive(wq, condition)			\
 	___wait_event(wq, condition, TASK_INTERRUPTIBLE, 1, 0,			\
 		      schedule())
