@@ -327,6 +327,10 @@ CONFIG_ARCH_HAS_GCOV_PROFILE_ALL=y
 CONFIG_HAVE_GENERIC_DMA_COHERENT=y
 CONFIG_RT_MUTEXES=y
 CONFIG_BASE_SMALL=0
+# Module policy: the CI pipeline builds and ships a module-free kernel
+# (plain `make` = vmlinux + Image.gz + dtbs; the AnyKernel3 zip has
+# do.modules=0).  Anything left at "=m" would therefore silently not exist,
+# so the few tristate leftovers are pinned to y (or n) explicitly.
 CONFIG_MODULES=y
 # CONFIG_MODULE_FORCE_LOAD is not set
 CONFIG_MODULE_UNLOAD=y
@@ -553,7 +557,6 @@ CONFIG_PREEMPT=y
 CONFIG_PREEMPT_COUNT=y
 CONFIG_HZ_300=y
 # CONFIG_HZ_250 is not set
-# CONFIG_HZ_300 is not set
 # CONFIG_HZ_1000 is not set
 CONFIG_HZ=300
 CONFIG_SCHED_HRTICK=y
@@ -3004,9 +3007,10 @@ CONFIG_MEDIA_USB_SUPPORT=y
 #
 # Webcam devices
 #
+# CONFIG_IR_MSM_GENI is not set
 CONFIG_USB_VIDEO_CLASS=y
 CONFIG_USB_VIDEO_CLASS_INPUT_EVDEV=y
-CONFIG_USB_GSPCA=m
+# CONFIG_USB_GSPCA is not set
 # CONFIG_USB_M5602 is not set
 # CONFIG_USB_STV06XX is not set
 # CONFIG_USB_GL860 is not set
@@ -5897,20 +5901,25 @@ CONFIG_SBITMAP=y
 
 #
 # RmNet extensions
+# (built-in, not modules - see the module policy note near CONFIG_MODULES)
 #
-CONFIG_RMNET_PERF=m
-CONFIG_RMNET_SHS=m
+CONFIG_RMNET_PERF=y
+CONFIG_RMNET_SHS=y
 
 #
-# In-kernel performance tuning (no fragments, no runtime script)
+# In-kernel performance tuning (no runtime script)
 #
-# These options used to live in kernel/configs/miatoll/tuning.config
-# and kernel/configs/miatoll/haptics-sound.config, which were merged
-# at build time.  They are compiled into the kernel now, directly in
-# this defconfig:
+# The core performance/memory policy is compiled straight into this
+# defconfig (no fragment, no runtime init script):
 #   HZ=300, KSM, THP (madvise), HugeTLB, BFQ, ZSWAP/frontswap/zbud,
-#   LZ4HC, SND_HRTIMER, ZRAM dedup, PSI.
+#   LZ4HC, ZRAM dedup, PSI.
 # Options that do not exist in this 4.14 tree (ENERGY_MODEL,
 # MEMCG_KMEM, ZSWAP_COMPRESSOR_DEFAULT_*, ZSWAP_ZPOOL_DEFAULT_*)
 # are intentionally not listed here.
+#
+# Feature/tuning fragments merged on top of this file at build time
+# (scripts/merge-defconfig.sh, in this order):
+#   ebpf, ntfs, erofs, bbr, droidspaces, nethunter,
+#   compiler (Polly + Clang LTO/ThinLTO + inlining),
+#   haptics-sound, bluetooth, wifi
 #

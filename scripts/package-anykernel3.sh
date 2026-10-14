@@ -1,7 +1,9 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 # scripts/package-anykernel3.sh
-# Package the AnyKernel3 flashable zip (Image.gz + dtb + dtbo).
+# Package the AnyKernel3 flashable zip (Image.gz + base DTB) and the raw
+# images for the GitHub artifact.
+#
 # Run from the kernel source root after a successful build (out/ populated).
 set -euo pipefail
 
@@ -17,12 +19,25 @@ rsync -a --exclude='.gitignore' --exclude='placeholder' AnyKernel3/ "$AK3/"
 # Build products
 cp out/arch/arm64/boot/Image.gz  "$AK3/"
 cp out/arch/arm64/boot/dtbo.img  "$AK3/"
-# DTB — AnyKernel3 expects a file named "dtb" (no extension)
-cp out/arch/arm64/boot/dts/qcom/cust-atoll-ab.dtb "$AK3/dtb" 2>/dev/null || true
+# DTB - AnyKernel3 expects a file named "dtb" (no extension) and uses it as
+# the base to merge the per-device overlays onto.  This is NOT optional: a zip
+# without it would flash a boot image with no device tree at all, so a missing
+# DTB is a hard error instead of a silent "|| true".
+DTB_SRC="out/arch/arm64/boot/dts/qcom/cust-atoll-ab.dtb"
+if [ ! -s "$DTB_SRC" ]; then
+  echo "FATAL: $DTB_SRC is missing; refusing to build a DTB-less zip" >&2
+  exit 1
+fi
+cp "$DTB_SRC" "$AK3/dtb"
 
-# Kernel modules: NOT shipped.  AnyKernel3/anykernel.sh sets do.modules=0 and
-# the zip is kernel-only (Image.gz + dtbo.img + dtb); flashing it must not
-# touch vendor/system, so out/**/*.ko stay out of the package on purpose.
+# Kernel modules: NOT shipped, on purpose.
+#   * AnyKernel3/anykernel.sh sets do.modules=0,
+#   * the CI build never runs "make modules",
+#   * the vendor defconfig has no "=m" left (see the module policy note there).
+# So the zip stays kernel-only and flashing it never touches vendor/system.
+if find out -name '*.ko' -print -quit | grep -q .; then
+  echo "NOTE: .ko files were produced by the build; intentionally not packaged." >&2
+fi
 
 # Keep ramdisk/ and patch/ dirs present (even if empty)
 mkdir -p "$AK3/ramdisk" "$AK3/patch"
@@ -42,15 +57,17 @@ ZIPFILE="Stormbreaker-miatoll-${TANGGAL}-build${RUN_NUM}.zip"
 # Raw images + metadata
 cp out/arch/arm64/boot/Image.gz  artifacts/
 cp out/arch/arm64/boot/dtbo.img  artifacts/
-cp out/arch/arm64/boot/dts/qcom/cust-atoll-ab.dtb artifacts/dtb 2>/dev/null || true
+cp "$DTB_SRC"                    artifacts/dtb
 
 # SHA256
 (
   cd artifacts
-  sha256sum Image.gz dtbo.img 2>/dev/null > SHA256SUMS || true
-  sha256sum "$ZIPFILE"        >> SHA256SUMS || true
+  sha256sum Image.gz dtbo.img dtb > SHA256SUMS
+  sha256sum "$ZIPFILE"           >> SHA256SUMS
 )
 
+# Provenance: this belongs next to the uploaded artifacts, not in the repo
+# root, otherwise it never reaches the download page.
 {
   echo "commit=${GITHUB_SHA:-HEAD}"
   echo "kernel.release=${KREL}"
@@ -58,7 +75,7 @@ cp out/arch/arm64/boot/dts/qcom/cust-atoll-ab.dtb artifacts/dtb 2>/dev/null || t
   echo "date=${TANGGAL}"
   clang --version 2>/dev/null | head -1 || true
   ld.lld --version 2>/dev/null | head -1 || true
-} > build-info.txt
+} > artifacts/build-info.txt
 
 echo ""
 echo "========== Package complete =========="

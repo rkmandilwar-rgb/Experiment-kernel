@@ -12,11 +12,11 @@
 # For every CONFIG_FOO=<value> line in each fragment, the fragment value
 # overwrites whatever was in the base .config.
 #
-# NOTE: performance/haptics tuning is *not* a fragment anymore — it is
-# compiled straight into arch/arm64/configs/vendor/xiaomi/miatoll_defconfig
-# (see the "In-kernel performance tuning" block at the end of that file).
-# Only the feature fragments below (eBPF, NTFS, EROFS, BBR, Droidspaces,
-# NetHunter) are merged here.
+# The core performance/memory policy is NOT a fragment: it is compiled
+# straight into arch/arm64/configs/vendor/xiaomi/miatoll_defconfig (see the
+# "In-kernel performance tuning" note at the end of that file).  What is
+# merged here are the feature and tuning packs, in this order — later
+# fragments win, so compiler/bt/wifi/haptics always have the last word.
 
 set -euo pipefail
 
@@ -33,6 +33,10 @@ frags=(
     kernel/configs/miatoll/bbr.config
     kernel/configs/miatoll/droidspaces.config
     kernel/configs/miatoll/nethunter.config
+    kernel/configs/miatoll/compiler.config
+    kernel/configs/miatoll/haptics-sound.config
+    kernel/configs/miatoll/bluetooth.config
+    kernel/configs/miatoll/wifi.config
 )
 
 echo "merge-defconfig.sh"
@@ -50,7 +54,10 @@ for f in "${frags[@]}"; do
             '#'*' is not set')
                 sym=$(echo "$line" | sed 's/^[[:space:]]*# CONFIG_\(.*\) is not set.*/\1/')
                 sed -i "s|^CONFIG_${sym}=.*|# CONFIG_${sym} is not set|" "$out"
-                if ! grep -q "CONFIG_${sym}" "$out"; then
+                # Only append when the symbol is not mentioned at all yet -
+                # an anchored match, so "CONFIG_FOO" is not considered
+                # present just because "CONFIG_FOOBAR" exists.
+                if ! grep -qE "^# ${sym} is not set\$" "$out"; then
                     echo "$line" >> "$out"
                 fi
                 count=$((count + 1))
@@ -58,10 +65,10 @@ for f in "${frags[@]}"; do
             'CONFIG_'*'='*)
                 sym=$(echo "$line" | cut -d= -f1)
                 val=$(echo "$line" | cut -d= -f2-)
-                if grep -q "^${sym}=" "$out"; then
+                if grep -qE "^${sym}=" "$out"; then
                     sed -i "s|^${sym}=.*|${sym}=${val}|" "$out"
-                elif grep -q "# ${sym} is not set" "$out"; then
-                    sed -i "s|# ${sym} is not set|${sym}=${val}|" "$out"
+                elif grep -qE "^# ${sym} is not set\$" "$out"; then
+                    sed -i "s|^# ${sym} is not set\$|${sym}=${val}|" "$out"
                 else
                     echo "$line" >> "$out"
                 fi

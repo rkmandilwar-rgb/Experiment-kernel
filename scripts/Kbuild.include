@@ -205,19 +205,13 @@ ld-option = $(call try-run, $(LD) $(LDFLAGS) $(1) -v,$(1),$(2))
 ar-option = $(call try-run, $(AR) rc$(1) "$$TMP",$(1),$(2))
 
 # ld-name
-# Expands to either bfd, gold, or lld
-ifneq (,$(LD))
-	__ld-name = $(shell $(LD) -v 2>&1)
-endif
-ifneq (,$(findstring GNU gold,$(__ld-name)))
-	ld-name = gold
-else
-	ifneq (,$(findstring LLD,$(__ld-name)))
-		ld-name = lld
-	else
-		ld-name = bfd
-	endif
-endif
+# Expands to either bfd, gold, or lld.  Evaluated lazily so that it tracks
+# the final $(LD): this file is included before the LLVM=1 toolchain block
+# assigns LD, so a parse-time snapshot (or the old "ifneq (,$(LD))" guard)
+# mis-detected the linker as bfd and sent CONFIG_LTO_CLANG builds down the
+# GNU gold path with an empty LD.
+__ld-name = $(shell $(LD) -v 2>&1)
+ld-name = $(if $(findstring GNU gold,$(__ld-name)),gold,$(if $(findstring LLD,$(__ld-name)),lld,bfd))
 
 # ld-version
 # Note this is mainly for HJ Lu's 3 number binutil versions

@@ -1428,6 +1428,33 @@ static char *cgroup_file_name(struct cgroup *cgrp, const struct cftype *cft,
 	return buf;
 }
 
+/*
+ * Droidspaces/LXC compatibility helper: when a v1 hierarchy is mounted with
+ * the NOPREFIX flag its control files lose their "<subsys>." prefix, but
+ * container runtimes still look the prefixed names up.  Fill @buf with the
+ * compat link name when one is needed and return true.
+ *
+ * The prefix rule mirrors cgroup_file_name(): legacy (v1) hierarchies use
+ * ss->legacy_name - e.g. blkio, whose subsystem is named "io" - so the
+ * meaningful legacy spellings ("blkio.throttle.read_bps_device") exist.
+ */
+static bool cgroup_compat_link_name(struct cgroup *cgrp,
+				    const struct cftype *cft, char *buf)
+{
+	const char *prefix;
+
+	if (!cft->ss || (cft->flags & CFTYPE_NO_PREFIX) ||
+	    !(cgrp->root->flags & CGRP_ROOT_NOPREFIX))
+		return false;
+
+	prefix = cgroup_on_dfl(cgrp) ? cft->ss->name : cft->ss->legacy_name;
+	if (!prefix)
+		prefix = cft->ss->name;
+
+	snprintf(buf, CGROUP_FILE_NAME_MAX, "%s.%s", prefix, cft->name);
+	return true;
+}
+
 /**
  * cgroup_file_mode - deduce file mode of a control file
  * @cft: the control file in question
@@ -1584,6 +1611,14 @@ static void cgroup_rm_file(struct cgroup *cgrp, const struct cftype *cft)
 	}
 
 	kernfs_remove_by_name(cgrp->kn, cgroup_file_name(cgrp, cft, name));
+
+	/*
+	 * Drop the NOPREFIX compatibility link as well, otherwise it stays
+	 * behind as a dangling symlink (and the next add of the same file set
+	 * fails with -EEXIST).
+	 */
+	if (cgroup_compat_link_name(cgrp, cft, name))
+		kernfs_remove_by_name(cgrp->kn, name);
 }
 
 /**
@@ -3808,12 +3843,9 @@ static int cgroup_add_file(struct cgroup_subsys_state *css, struct cgroup *cgrp,
 	 * is simply absent, which is the exact same state the kernel was in
 	 * before this patch.
 	 */
-	if (cft->ss && (cgrp->root->flags & CGRP_ROOT_NOPREFIX) &&
-	    !(cft->flags & CFTYPE_NO_PREFIX)) {
+	if (cgroup_compat_link_name(cgrp, cft, name)) {
 		struct kernfs_node *link_kn;
 
-		snprintf(name, CGROUP_FILE_NAME_MAX, "%s.%s", cft->ss->name,
-			 cft->name);
 		link_kn = kernfs_create_link(cgrp->kn, name, kn);
 		if (IS_ERR(link_kn)) {
 			pr_warn_once("cgroup: failed to create prefixed link %s (%ld)\n",
