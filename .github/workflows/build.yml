@@ -288,6 +288,15 @@ jobs:
           require 'CONFIG_HIDRAW=y'
           require 'CONFIG_UHID=y'
 
+          # BT/WiFi tuning: internal WCN3990 (QCA protocol over UART) plus
+          # external dongles, and the vendor's built-in regulatory database.
+          require 'CONFIG_BT_HIDP=y'
+          require 'CONFIG_BT_BNEP=y'
+          require 'CONFIG_BT_HCIUART_QCA=y'
+          require 'CONFIG_BT_HCIBTUSB_BCM=y'
+          require 'CONFIG_BT_HCIBTUSB_RTL=y'
+          require 'CONFIG_CFG80211_INTERNAL_REGDB=y'
+
           # KernelSU (backslashxx v3.3.1)
           require 'CONFIG_KSU=y'
           require 'CONFIG_KSU_LSM_SECURITY_HOOKS=y'
@@ -337,14 +346,26 @@ jobs:
           grep -q -- '-mllvm -polly' Makefile \
             || { echo "::error::Polly build flags missing"; exit 1; }
 
-          # Conservative 4 GB RAM profile: standard Android swap/accounting.
+          # Simple LMK is the only low memory killer. It requires the legacy
+          # driver, MEMCG and PSI to stay off, and the 4 GB anchor values to
+          # survive the fragment merge.
+          require 'CONFIG_ANDROID_SIMPLE_LMK=y'
+          require 'CONFIG_ANDROID_SIMPLE_LMK_MINFREE=176'
+          require 'CONFIG_ANDROID_SIMPLE_LMK_TIMEOUT_MSEC=100'
+          require_off 'CONFIG_MEMCG'
+          require_off 'CONFIG_PSI'
+          require_off 'CONFIG_ANDROID_LOW_MEMORY_KILLER'
+          grep -q 'simple_lmk_mm_freed(mm)' kernel/fork.c \
+            || { echo "::error::SLMK fork hook missing"; exit 1; }
+          grep -q 'CONFIG_ANDROID_SIMPLE_LMK' mm/oom_kill.c \
+            || { echo "::error::SLMK oom_kill hook missing"; exit 1; }
+          grep -q 'min_free_pages' drivers/android/simple_lmk.c \
+            || { echo "::error::SLMK per-RAM minfree scaling missing"; exit 1; }
+
+          # Conservative 4 GB RAM profile: standard Android swap path.
           require 'CONFIG_ZRAM=y'
           require 'CONFIG_ZRAM_DEDUP=y'
           require 'CONFIG_CRYPTO_LZ4=y'
-          require 'CONFIG_MEMCG=y'
-          require 'CONFIG_MEMCG_SWAP=y'
-          require 'CONFIG_MEMCG_SWAP_ENABLED=y'
-          require 'CONFIG_PSI=y'
           require 'CONFIG_PSTORE=y'
           require 'CONFIG_PSTORE_RAM=y'
           require 'CONFIG_PSTORE_CONSOLE=y'
@@ -357,7 +378,6 @@ jobs:
           require_off 'CONFIG_IDLE_PAGE_TRACKING'
           require_off 'CONFIG_PAGE_EXTENSION'
           require_off 'CONFIG_ZRAM_ENTROPY'
-          require_off 'CONFIG_PSI_DEFAULT_DISABLED'
           require_off 'CONFIG_HUGETLBFS'
           require_off 'CONFIG_HUGETLB_PAGE'
 

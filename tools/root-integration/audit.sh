@@ -122,6 +122,21 @@ done
 grep -qE '^CONFIG_KSU_TAMPER_SYSCALL_TABLE=[ym]' $POLICY_SRC \
   && fail "CONFIG_KSU_TAMPER_SYSCALL_TABLE must stay disabled" \
   || ok "CONFIG_KSU_TAMPER_SYSCALL_TABLE stays disabled"
+# Simple LMK is the only low memory killer (4 GB anchor values)
+for opt in CONFIG_ANDROID_SIMPLE_LMK=y CONFIG_ANDROID_SIMPLE_LMK_MINFREE=176 \
+           CONFIG_ANDROID_SIMPLE_LMK_TIMEOUT_MSEC=100; do
+  grep -qxF "$opt" $POLICY_SRC && ok "$opt" || fail "$opt not enabled in defconfig/fragments"
+done
+# BT/WiFi tuning policy
+for opt in CONFIG_BT_HCIUART_QCA=y CONFIG_BT_HCIBTUSB_BCM=y CONFIG_BT_HCIBTUSB_RTL=y \
+           CONFIG_CFG80211_INTERNAL_REGDB=y; do
+  grep -qxF "$opt" $POLICY_SRC && ok "$opt" || fail "$opt not enabled in defconfig/fragments"
+done
+# Simple LMK dependencies must stay disabled
+for opt in CONFIG_MEMCG CONFIG_PSI CONFIG_ANDROID_LOW_MEMORY_KILLER; do
+  grep -qE "^${opt}=[ym]" $POLICY_SRC && fail "$opt must stay disabled (Simple LMK)" \
+    || ok "$opt stays disabled"
+done
 
 echo
 if [ "$FAIL" -ne 0 ]; then
