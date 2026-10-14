@@ -1,6 +1,23 @@
-# Stormbreaker — build & release (miatoll)
-# Non-GKI kernel v4.14 for Curtana / Gram / Joyeuse / Excalibur
-# Built with LLVM 22 from apt.llvm.org (official), no GCC for aarch64.
+# Stormbreaker — build (miatoll)
+# Non-GKI kernel v4.14.357 for Curtana / Gram / Joyeuse / Excalibur (SM6250/Atoll)
+#
+# Toolchain: pinned AOSP Clang r596125, fully LLVM (LLVM=1, LLVM_IAS=1,
+# ld.lld).  Polly needs a toolchain that actually ships the pass, so the
+# build uses the AOSP clang bundle instead of apt.llvm.org (whose packages
+# do not include Polly) — the "Verify toolchain" step runs a Polly sanity
+# check and fails early if the compiler cannot accept -mllvm -polly.
+#
+# Codegen: CONFIG_LLVM_POLLY + CONFIG_LTO_CLANG/THINLTO (--lto-O3 at link)
+# + CONFIG_INLINE_OPTIMIZATION (see kernel/configs/miatoll/compiler.config).
+#
+# Feature/tuning packs (kernel/configs/miatoll/*.config, merged by
+# scripts/merge-defconfig.sh): eBPF, NTFS(+ntfs3), EROFS, BBRv1, Droidspaces,
+# NetHunter, haptics & sound, Bluetooth, Wi-Fi.
+#
+# This pipeline builds and uploads artifacts only.  The release job below is
+# permanently disabled (`if: false`) on purpose: nothing is ever published to
+# the repo's Releases page.
+
 name: Build & Release Stormbreaker Kernel
 
 on:
@@ -11,7 +28,7 @@ on:
       - 'arena/**'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: miatoll-kernel-${{ github.ref }}
@@ -20,7 +37,11 @@ concurrency:
 env:
   ARCH: arm64
   DEFCONFIG: vendor/xiaomi/miatoll_defconfig
-  LLVM_VERSION: "22"
+  # Pinned AOSP clang (Polly-enabled); r596125 == LLVM 22.
+  LLVM_VER: "r596125"
+  # Mirror first (fast, reliable), then the AOSP host as fallback.
+  CLANG_URL_MIRROR: https://github.com/jaymvictorino/clang-r596125-mirror/releases/download/v0.0.1/linux-x86-refs-heads-mirror-goog-main-llvm-toolchain-source-clang-r596125.tar.gz
+  CLANG_URL_AOSP: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r596125.tar.gz
 
 jobs:
   build:
@@ -32,37 +53,44 @@ jobs:
       - name: Checkout kernel source
         uses: actions/checkout@v4
 
-      - name: Install LLVM 22 + build dependencies
+      - name: Report runner resources
         run: |
-          # ── LLVM 22 from apt.llvm.org (official stable) ──
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
-            | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] \
-            http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
-            | sudo tee /etc/apt/sources.list.d/llvm-22.list
+          echo "::group::Runner"
+          echo "cpus : $(nproc)"
+          free -h
+          df -h / | tail -1
+          echo "::endgroup::"
 
+      - name: Install build dependencies
+        run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            clang-${LLVM_VERSION} lld-${LLVM_VERSION} \
-            llvm-${LLVM_VERSION} \
+          sudo apt-get install -y --no-install-recommends \
             bc bison ccache flex git kmod libelf-dev libc6-dev \
-            make libssl-dev python3 rsync zstd zip \
+            make libssl-dev python3 rsync zstd zip curl ca-certificates \
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi
+          sudo apt-get install -y --no-install-recommends libtinfo5 || true
 
-          # ── Remove system clang to avoid conflicts with LLVM 22 ──
-          sudo apt-get remove -y clang clang-18 lld lld-18 2>/dev/null || true
-
-          # ── Create unversioned symlinks so the Makefile finds clang, ld.lld, etc. ──
-          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-${LLVM_VERSION} 100
-          sudo update-alternatives --install /usr/bin/ld.lld ld.lld /usr/bin/ld.lld-${LLVM_VERSION} 100
-          for tool in ar nm objcopy objdump readelf strip; do
-            sudo update-alternatives --install /usr/bin/llvm-${tool} llvm-${tool} /usr/bin/llvm-${tool}-${LLVM_VERSION} 100
-          done
-
-      - name: Verify toolchain
+      - name: Fetch AOSP clang ${{ env.LLVM_VER }}
         run: |
-          echo "::group::Clang ${LLVM_VERSION}"
+          set -euo pipefail
+          DEST="$GITHUB_WORKSPACE/toolchains/clang-${LLVM_VER}"
+          mkdir -p "$DEST"
+          for url in "$CLANG_URL_MIRROR" "$CLANG_URL_AOSP"; do
+            echo "==> trying $url"
+            if curl -fL --retry 3 --retry-delay 5 --connect-timeout 30 -o clang.tar.gz "$url"; then
+              tar -xzf clang.tar.gz -C "$DEST" && rm -f clang.tar.gz && break
+            fi
+            rm -f clang.tar.gz
+          done
+          test -x "$DEST/bin/clang" || { echo "::error::could not fetch clang ${LLVM_VER}"; exit 1; }
+          "$DEST/bin/clang" --version | head -3
+          echo "$DEST/bin" >> "$GITHUB_PATH"
+
+      - name: Verify toolchain and Polly
+        run: |
+          set -euo pipefail
+          echo "::group::Clang ${LLVM_VER} (AOSP)"
           clang --version
           echo "::endgroup::"
           echo "::group::LLVM tools"
@@ -71,21 +99,27 @@ jobs:
           llvm-nm --version | head -1
           llvm-objcopy --version | head -1
           echo "::endgroup::"
-          echo "::group::Cross compilers"
+          echo "::group::Cross compilers (32-bit vDSO only)"
           aarch64-linux-gnu-gcc --version | head -1
           arm-linux-gnueabi-gcc --version | head -1
+          echo "::endgroup::"
+          echo "::group::Polly sanity"
+          echo 'int a(int n){int s=0;for(int i=0;i<n;i++)s+=i;return s;}' > /tmp/polly.c
+          clang -O2 -mllvm -polly -c /tmp/polly.c -o /tmp/polly.o \
+            || { echo "::error::toolchain has no Polly support"; exit 1; }
+          echo "Polly accepted"
           echo "::endgroup::"
 
       - name: Restore compiler cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/ccache
-          # Key on the things that actually change the compiled output
-          # (defconfig + fragments + this workflow) instead of on the commit
-          # SHA, so consecutive runs on different commits reuse the cache.
-          key: miatoll-ccache-${{ runner.os }}-${{ hashFiles('arch/arm64/configs/vendor/xiaomi/miatoll_defconfig', 'kernel/configs/miatoll/*.config', '.github/workflows/build.yml') }}
+          # Key on what actually changes the compiled output (toolchain +
+          # defconfig + every fragment), not on the commit SHA, so consecutive
+          # runs on different commits still reuse the cache.
+          key: miatoll-ccache-${{ env.LLVM_VER }}-${{ runner.os }}-${{ hashFiles('arch/arm64/configs/vendor/xiaomi/miatoll_defconfig', 'kernel/configs/miatoll/*.config', '.github/workflows/build.yml') }}
           restore-keys: |
-            miatoll-ccache-${{ runner.os }}-
+            miatoll-ccache-${{ env.LLVM_VER }}-${{ runner.os }}-
 
       - name: Generate and verify configuration
         run: |
@@ -104,7 +138,13 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu- \
             vendor/xiaomi/stormbreaker_defconfig
 
-          # ── Disable modversions (clang-built CRC drift) ──
+          # ── Module versioning off ──
+          # Note what this really does: with MODVERSIONS=n the loader compares
+          # the FULL vermagic string (release included), whereas MODVERSIONS=y
+          # deliberately ignores the version part for modules that carry CRCs.
+          # This kernel ships no modules at all, so CRC sections are pointless;
+          # dropping them keeps the image smaller and makes it impossible for a
+          # foreign .ko built for another release to half-load.
           scripts/config --file out/.config -d CONFIG_MODVERSIONS
 
           # ── Fill in dependencies silently ──
@@ -119,6 +159,12 @@ jobs:
               echo "::error::Required config missing: $1"
               exit 1
             }
+          }
+          require_off() {
+            if grep -qE "^${1}=[ym]" out/.config; then
+              echo "::error::Config must stay disabled: $1"
+              exit 1
+            fi
           }
           echo "::group::Config verification"
 
@@ -138,8 +184,10 @@ jobs:
           require 'CONFIG_NTFS_FS=y'
           require 'CONFIG_NTFS_RW=y'
 
-          # BBR
+          # BBR (v1) as the default congestion control, fq pacing
           require 'CONFIG_TCP_CONG_BBR=y'
+          require 'CONFIG_DEFAULT_TCP_CONG="bbr"'
+          require 'CONFIG_NET_SCH_FQ=y'
 
           # Droidspaces / namespaces
           require 'CONFIG_SYSVIPC=y'
@@ -172,6 +220,9 @@ jobs:
           require 'CONFIG_IP6_NF_NAT=y'
           require 'CONFIG_IP6_NF_TARGET_MASQUERADE=y'
           require 'CONFIG_IP_SET=y'
+          # Droidspaces --cpus cannot work here (CFS_BANDWIDTH depends on
+          # !SCHED_WALT): assert that we did NOT pretend otherwise.
+          require_off 'CONFIG_CFS_BANDWIDTH'
 
           # NetHunter
           require 'CONFIG_USB_ACM=y'
@@ -183,6 +234,8 @@ jobs:
           require 'CONFIG_CAN=y'
           require 'CONFIG_CAN_RAW=y'
           require 'CONFIG_CAN_VCAN=y'
+          # slcan must be built in, not a module: no .ko is shipped
+          require 'CONFIG_CAN_SLCAN=y'
           require 'CONFIG_NFSD=y'
           require 'CONFIG_CFG80211=y'
           require 'CONFIG_MAC80211=y'
@@ -193,9 +246,7 @@ jobs:
           require 'CONFIG_HIDRAW=y'
           require 'CONFIG_UHID=y'
 
-          # In-kernel performance/haptics tuning — compiled straight into
-          # arch/arm64/configs/vendor/xiaomi/miatoll_defconfig (no fragments,
-          # no runtime script).
+          # In-kernel performance/memory tuning
           require 'CONFIG_HZ_300=y'
           require 'CONFIG_KSM=y'
           require 'CONFIG_TRANSPARENT_HUGEPAGE=y'
@@ -211,11 +262,107 @@ jobs:
           require 'CONFIG_CRYPTO_LZ4HC=y'
           require 'CONFIG_SND_HRTIMER=y'
 
+          # Compiler/codegen pack (Polly + Clang LTO + inlining)
+          require 'CONFIG_LLVM_POLLY=y'
+          require 'CONFIG_LTO_CLANG=y'
+          require 'CONFIG_THINLTO=y'
+          require 'CONFIG_INLINE_OPTIMIZATION=y'
+          grep -q -- '-mllvm -polly' Makefile \
+            || { echo "::error::Polly build flags missing from Makefile"; exit 1; }
+          grep -q 'config LLVM_POLLY' arch/Kconfig \
+            || { echo "::error::LLVM_POLLY Kconfig option missing"; exit 1; }
+          grep -q 'config INLINE_OPTIMIZATION' init/Kconfig \
+            || { echo "::error::INLINE_OPTIMIZATION Kconfig option missing"; exit 1; }
+
+          # Kinesis ports: uname spoof, BPF helper, CASS, TEO, LZ4KD, ramdisk
+          require 'CONFIG_FAKE_UNAME_5_10=y'
+          require 'CONFIG_SCHED_CASS=y'
+          require 'CONFIG_CPU_IDLE_GOV_TEO=y'
+          require 'CONFIG_RD_XZ=y'
+          require 'CONFIG_RD_LZO=y'
+          require 'CONFIG_RD_LZ4=y'
+          require 'CONFIG_CRYPTO_LZ4KD=y'
+          require 'CONFIG_LZ4KD_COMPRESS=y'
+          require 'CONFIG_LZ4KD_DECOMPRESS=y'
+          require 'CONFIG_KERNEL_MODE_NEON=y'
+          grep -q 'bpf_trace_printk_dummy' kernel/bpf/core.c \
+            || { echo "::error::dummy bpf_trace_printk helper missing"; exit 1; }
+          grep -q 'cass_select_task_rq_fair' kernel/sched/cass.c \
+            || { echo "::error::CASS scheduler source missing"; exit 1; }
+          grep -q 'FAKE_UNAME_5_10' kernel/sys.c \
+            || { echo "::error::uname spoof for the BPF loaders missing"; exit 1; }
+
+          # Kinesis parity options: suspend path, tethering/TTL helpers, the
+          # Android quota2 logger, the HMARK marker and msdos FAT tooling.
+          require 'CONFIG_SUSPEND_SKIP_SYNC=y'
+          require 'CONFIG_NETFILTER_XT_TARGET_HMARK=y'
+          require 'CONFIG_NETFILTER_XT_MATCH_QUOTA2_LOG=y'
+          require 'CONFIG_IP_NF_TARGET_TTL=y'
+          require 'CONFIG_IP6_NF_TARGET_HL=y'
+          require 'CONFIG_MSDOS_FS=y'
+          # EROFS: the fragment enables the filesystem; these make sure the
+          # compressed (LZ4) reader that came with the port is really in.
+          require 'CONFIG_EROFS_FS=y'
+          require 'CONFIG_EROFS_FS_ZIP=y'
+          require 'CONFIG_LZ4_DECOMPRESS=y'
+
+          # Haptics & sound pack
+          require 'CONFIG_SND_PCM_TIMER=y'
+          require 'CONFIG_SND_DYNAMIC_MINORS=y'
+          require 'CONFIG_SND_COMPRESS_OFFLOAD=y'
+          require 'CONFIG_SND_SOC_COMPRESS=y'
+          require 'CONFIG_SND_USB_AUDIO=y'
+          require 'CONFIG_INPUT_FF_MEMLESS=y'
+          require 'CONFIG_AW8624_HAPTIC=y'
+          require 'CONFIG_DRV2624_HAPTIC=y'
+          grep -q 'WQ_HIGHPRI' drivers/misc/aw8624_haptic/aw8624.c \
+            || { echo "::error::AW8624 vibrator workqueue is not high-priority"; exit 1; }
+          grep -q 'static ssize_t aw8624_ulevel_store' drivers/misc/aw8624_haptic/aw8624.c \
+            || { echo "::error::AW8624 ulevel control missing"; exit 1; }
+          grep -q 'if (val > 128)' drivers/misc/aw8624_haptic/aw8624.c \
+            || { echo "::error::AW8624 ulevel range check missing"; exit 1; }
+
+          # Bluetooth tuning: internal WCN3990 goes through hci_qca
+          require 'CONFIG_BT_HCIUART=y'
+          require 'CONFIG_BT_HCIUART_H4=y'
+          require 'CONFIG_BT_HCIUART_QCA=y'
+          require 'CONFIG_BT_HIDP=y'
+          require 'CONFIG_BT_BNEP=y'
+          require 'CONFIG_BT_RFCOMM_TTY=y'
+          require 'CONFIG_BT_HCIVHCI=y'
+          require 'CONFIG_BT_HCIBTUSB_BCM=y'
+          require 'CONFIG_BT_HCIBTUSB_RTL=y'
+          require 'CONFIG_BT_BNEP_PROTO_FILTER=y'
+
+          # Wi-Fi tuning
+          require 'CONFIG_CFG80211_INTERNAL_REGDB=y'
+          require 'CONFIG_NL80211_TESTMODE=y'
+          require 'CONFIG_CFG80211_WEXT=y'
+          require 'CONFIG_MAC80211_RC_DEFAULT="minstrel_ht"'
+          require 'CONFIG_MAC80211_MESH=y'
+          require 'CONFIG_QCA_CLD_WLAN=y'
+
+          # Module-free build: nothing may be left as a module
+          if grep -q '=m$' out/.config; then
+            echo "::error::Modules are enabled but the pipeline never builds/ships them:"
+            grep '=m$' out/.config
+            exit 1
+          fi
+
+          # cgroup NOPREFIX compatibility links must use the legacy prefix
+          grep -q 'cgroup_compat_link_name' kernel/cgroup/cgroup.c \
+            || { echo "::error::cgroup NOPREFIX compat link helper missing"; exit 1; }
+
           echo "::endgroup::"
           echo "::group::Config stats"
           echo "  =y  : $(grep -c '=y' out/.config)"
           echo "  =m  : $(grep -c '=m' out/.config)"
           echo "::endgroup::"
+
+      - name: Check config fragments against the generated config
+        run: |
+          set -o pipefail
+          bash scripts/check-config-fragments.sh out/.config 2>&1 | tee fragment-check.log
 
       - name: Build kernel, DTB and DTBO
         run: |
@@ -228,24 +375,35 @@ jobs:
           # below that so the cache entry can actually be saved/restored.
           ccache --max-size=5G
 
-          # Kernel 4.14 predates Clang 22; disable -Werror to tolerate
-          # warnings that the newer toolchain now flags.
+          # Kernel 4.14 predates this toolchain; disable -Werror to tolerate
+          # warnings that the newer clang now flags.
           # -k (keep going) so a broken file does not hide the errors behind it.
           set +e
           make -k -j"$(nproc)" O=out ARCH=arm64 \
             LLVM=1 LLVM_IAS=1 \
-            CC='ccache clang-22' HOSTCC='ccache clang-22' \
+            CC='ccache clang' HOSTCC='ccache clang' \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump \
+            READELF=llvm-readelf STRIP=llvm-strip \
+            HOSTLD=ld.lld HOSTAR=llvm-ar \
             KCFLAGS="-Wno-error" \
             > build.log 2>&1
           status=$?
           set -e
 
           if [ "$status" -ne 0 ]; then
-            grep -E ' error:|fatal error:' build.log | sed 's/\r$//' | awk '!seen[$0]++' \
+            grep -E ' error:|fatal error:|Error [0-9]+|Killed' build.log | sed 's/\r$//' | awk '!seen[$0]++' \
               | cut -c1-200 > build-errors.txt || true
             total=$(wc -l < build-errors.txt)
+            # If the pattern matched nothing, surface the tail so a failure is
+            # never reported as "0 distinct errors".
+            if [ "$total" -eq 0 ]; then
+              tail -30 build.log | sed 's/\r$//' | cut -c1-200 > build-errors.txt || true
+              total=$(wc -l < build-errors.txt)
+            fi
             # Emit each error as a GitHub annotation (visible in API)
             while IFS= read -r line; do
               echo "::error::$line"
@@ -290,14 +448,6 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu- kernelrelease \
             | tee kernel.release
 
-          {
-            echo "commit=${GITHUB_SHA}"
-            echo "kernel.release=$(cat kernel.release)"
-            echo "toolchain=llvm-${LLVM_VERSION}"
-            clang --version | head -1 | sed 's/^/clang.version=/'
-            ld.lld --version | head -1 | sed 's/^/lld.version=/'
-          } > build-info.txt
-
       - name: Upload failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
@@ -306,6 +456,7 @@ jobs:
           path: |
             build.log
             build-errors.txt
+            fragment-check.log
             out/.config
           if-no-files-found: ignore
           retention-days: 7
@@ -327,8 +478,9 @@ jobs:
   release:
     name: Publish release
     needs: build
-    # Kept permanently disabled: this pipeline only builds and uploads the
-    # artifact, it must never create a GitHub release.
+    # Kept permanently disabled: this pipeline builds and uploads the artifact
+    # only.  Flip to `if: true` (or delete this line) deliberately if a GitHub
+    # release is ever wanted.
     if: false
     runs-on: ubuntu-24.04
     permissions:
@@ -360,11 +512,15 @@ jobs:
           **Kernel:** \`${KREL}\`
           **Device:** Xiaomi Miatoll (Curtana / Gram / Joyeuse / Excalibur)
           **SoC:** SM6250 (Atoll) — non-GKI kernel v4.14
-          **Toolchain:** LLVM/Clang \`${LLVM_VERSION}\` (apt.llvm.org, zero GCC for aarch64)
+          **Toolchain:** AOSP Clang \`${LLVM_VER}\` with Polly + ThinLTO (LLVM/LLD)
 
           ---
 
           ## ✨ Features
+
+          ### Codegen
+          - Polly polyhedral loop optimizer, Clang ThinLTO, aggressive inlining
+          - Built with ld.lld (LLVM_IAS integrated assembler)
 
           ### eBPF (extended Berkeley Packet Filter)
           - \`BPF_SYSCALL=y\` — BPF syscall + arm64 JIT (\`BPF_JIT_ALWAYS_ON\`)
@@ -374,44 +530,59 @@ jobs:
 
           ### NTFS support
           - **Legacy NTFS** (\`NTFS_FS=y\`, \`NTFS_RW=y\`) — read + partial write
-          - **Paragon NTFS3** read-write driver (\`fs/ntfs3/\`, backported to 4.14)
+          - **Paragon NTFS3** read-write driver (backported to 4.14)
             - Normal / sparse / compressed files, journal replaying
             - POSIX ACLs, LZX / XPRESS decompression
             - Coexists with legacy driver: \`mount -t ntfs3\`
 
           ### EROFS (Enhanced Read-Only File System)
-          - \`EROFS_FS=y\` with LZ4 compression
-          - Extended attributes, POSIX ACL, security labels
-          - Mounts system / vendor EROFS partitions natively
+          - \`EROFS_FS=y\` with LZ4 compression, xattrs, ACLs, security labels
 
           ### BBRv1 congestion control
           - BBR v1 as default TCP congestion control (\`DEFAULT_TCP_CONG="bbr"\`)
-          - fq pacing qdisc (\`NET_SCH_FQ=y\`) — mandatory for BBR
-          - CUBIC and RENO still compiled in; BBR is the new default
+          - fq pacing qdisc (\`NET_SCH_FQ=y\`)
+
+          ### Haptics, Bluetooth, Wi-Fi tuning
+          - **Haptics:** AW8624 vibrator workqueue runs at high priority (buzz
+            onset is not queued behind ordinary work); \`ulevel\` sysfs ceiling
+            (0..128) for userspace strength control; DRV2624 fallback;
+            force-feedback input layer; ALSA hrtimer + compress offload
+          - **Bluetooth:** QCA UART protocol (\`hci_qca\`) for the internal
+            WCN3990 — in-band sleep / UART clock control; virtual HCI for
+            btmon/btsnoop; BNEP filters for tethering; btusb BCM/RTL
+          - **Wi-Fi:** in-kernel regulatory database (no CRDA on Android),
+            NL80211 testmode (monitor/injection tooling), minstrel_ht rate
+            control, mesh; Qualcomm CLD stack + CNSS netlink
 
           ### Droidspaces (Linux containers on Android)
           - Full namespace isolation: PID, UTS, IPC, NET, USER
-          - cgroup controllers: device, sched, freezer, net_prio, cpuacct, pids, CFS bandwidth, memory
-          - seccomp + seccomp filter
-          - devtmpfs + auto-mount, overlayfs (volatile mode)
-          - Full netfilter stack: conntrack, NAT, nftables, bridge netfilter, VETH
-          - IPv6 NAT (NAT66), UFW / fail2ban firewall inside containers
-          - Docker-in-container: HUGETLBFS, CHECKPOINT_RESTORE, MACVLAN, VXLAN, INET_DIAG, vsock
-          - Cgroup NOPREFIX symlink fix for Droidspaces / LXC compatibility
+          - cgroup controllers: device, sched, freezer, net_prio, cpuacct,
+            pids, memory (**no CFS bandwidth — see the note below**)
+          - seccomp + seccomp filter, devtmpfs, overlayfs (volatile mode)
+          - Full netfilter stack: conntrack, NAT, nftables, bridge netfilter,
+            VETH, IPv6 NAT (NAT66)
+          - Prefixed cgroup control files published as links for v1 mounts
+            that use the \`noprefix\` option (blkio/memory/cpu spellings)
+          - **Known limitation:** \`--cpus\` quotas need \`CONFIG_CFS_BANDWIDTH\`,
+            which this tree cannot enable while Qualcomm WALT is on. Memory and
+            PID limits work.
 
           ### Kali NetHunter support
-          - **USB Gadget (configfs):** HID (BadUSB), CDC ACM, ECM, NCM, RNDIS, Mass Storage, EEM
+          - **USB Gadget (configfs):** HID (BadUSB), CDC ACM, ECM, NCM, RNDIS,
+            Mass Storage, EEM
           - **USB traffic monitoring:** \`USB_MON=y\`
-          - **CAN bus:** vcan, slcan, all USB CAN adaptors (EMS, ESD, GS, Kvaser, PEAK, 8DEV, MCBA)
-          - **Bluetooth Arsenal:** RFCOMM TTY, BNEP, HIDP, hcibtusb
+          - **CAN bus:** vcan, slcan (built-in), all USB CAN adaptors
+          - **Bluetooth Arsenal:** RFCOMM TTY, BNEP, HIDP
           - **NFS server + client:** v2 / v3 / v4
-          - **mac80211 + external USB Wi-Fi:** ath9k_htc, carl9170, rt2x00 (rt2500usb/rt73usb/rt2800usb), mt7601u, rtl8187, rtl8xxxu, zd1211rw
+          - **mac80211 + external USB Wi-Fi:** ath9k_htc, carl9170, rt2x00,
+            mt7601u, rtl8187, rtl8xxxu, zd1211rw
           - **USB serial:** CH341, FTDI, PL2303, CP210X
           - **SDR:** DVB RTL28XXU
 
           ### Security fixes
-          - **CVE-2025-39764** — Fixed memory leak in nf_conntrack expectation dumpers (pointer+refcount → cookie)
-          - **Cgroup NOPREFIX** — symlink fix with proper IS_ERR() error handling
+          - **CVE-2025-39764** — netfilter ctnetlink expectation dumpers use a
+            cookie (expect id) instead of a pointer+refcount, so the dump
+            resumption path can no longer double-increment a reference
 
           ---
 
@@ -419,12 +590,12 @@ jobs:
 
           \`\`\`
           # TWRP / custom recovery:
-          # 1. Flash the .zip
+          # 1. Flash the .zip (boot image only; the ramdisk and DTB are reused)
           # 2. Reboot
-          # 3. Verify Droidspaces: su -c droidspaces check
-          \`\`\`
+          # \`\`\`
 
-          **Contents:** \`Image.gz\` + \`dtbo.img\` (all four miatoll variants)
+          **Contents:** \`Image.gz\` + \`dtbo.img\` + base \`dtb\` for all four
+          miatoll variants. No kernel modules are shipped (\`do.modules=0\`).
           EOF
 
           if gh release view "$TAG" >/dev/null 2>&1; then
