@@ -93,7 +93,7 @@ grep -q "if (!aw8624->enable_pin_control)" drivers/misc/aw8624_haptic/aw8624.c \
 grep -q 'awinic,aw8624_haptic' arch/arm64/boot/dts/qcom/cust-atoll-idp.dtsi \
   && ok "device tree node present" || fail "aw8624 device tree node missing"
 
-echo "== SEA ports (Reflex / Simple GPU / BT + wakelock tuning / KFENCE)"
+echo "== SEA ports (Reflex / Simple GPU / BT + wakelock tuning / KFENCE / NandSwap)"
 grep -q "CPU_FREQ_GOV_REFLEX" drivers/cpufreq/Kconfig \
   && ok "Reflex Kconfig wired" || fail "Reflex Kconfig missing"
 grep -qE 'obj-[$][(]CONFIG_CPU_FREQ_GOV_REFLEX[)]' drivers/cpufreq/Makefile \
@@ -132,6 +132,24 @@ for opt in CONFIG_KFENCE=y CONFIG_KFENCE_STATIC_KEYS=y CONFIG_KFENCE_SAMPLE_INTE
   grep -q "$opt" arch/arm64/configs/vendor/xiaomi/miatoll_defconfig \
     && ok "defconfig: $opt" || fail "defconfig lost $opt"
 done
+[ -e drivers/soc/oplus_nandswap/nandswap_core.c ] && ok "nandswap core present" || fail "nandswap core missing"
+[ -e include/linux/nandswap.h ] && ok "nandswap header present" || fail "nandswap header missing"
+grep -qE 'obj-[$][(]CONFIG_NANDSWAP[)]' drivers/soc/Makefile \
+  && ok "NandSwap wired into drivers/soc" || fail "NandSwap not in drivers/soc/Makefile"
+grep -q "oplus_nandswap/Kconfig" drivers/soc/Kconfig \
+  && ok "NandSwap Kconfig sourced" || fail "NandSwap Kconfig not sourced"
+grep -q "SWP_NANDSWAP" include/linux/swap.h \
+  && ok "swap.h SWP_NANDSWAP flag" || fail "swap.h missing SWP_NANDSWAP"
+grep -q "SWAP_NANDSWAP_PRIO" include/linux/swap.h \
+  && ok "swap.h SWAP_NANDSWAP_PRIO" || fail "swap.h missing SWAP_NANDSWAP_PRIO"
+grep -q "nswap_reclaim_page_list" mm/vmscan.c \
+  && ok "vmscan nswap_reclaim_page_list" || fail "vmscan nswap hook missing"
+grep -q "current_is_nswapoutd" mm/swapfile.c \
+  && ok "swapfile nandswap device filter" || fail "swapfile nandswap filter missing"
+grep -q "current_is_nswapoutd" mm/swap_slots.c \
+  && ok "swap_slots nswapoutd bypass" || fail "swap_slots nswapoutd bypass missing"
+grep -q "CONFIG_NANDSWAP=y" arch/arm64/configs/vendor/xiaomi/miatoll_defconfig \
+  && ok "defconfig: CONFIG_NANDSWAP=y" || fail "defconfig lost CONFIG_NANDSWAP=y"
 
 echo "== AnyKernel3 installer"
 if bash "$TOP/tools/root-integration/test-ak3.sh" "$TOP/AnyKernel3" >/dev/null 2>&1; then
