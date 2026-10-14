@@ -93,7 +93,7 @@ grep -q "if (!aw8624->enable_pin_control)" drivers/misc/aw8624_haptic/aw8624.c \
 grep -q 'awinic,aw8624_haptic' arch/arm64/boot/dts/qcom/cust-atoll-idp.dtsi \
   && ok "device tree node present" || fail "aw8624 device tree node missing"
 
-echo "== SEA ports (Reflex / Simple GPU / BT + wakelock tuning)"
+echo "== SEA ports (Reflex / Simple GPU / BT + wakelock tuning / KFENCE)"
 grep -q "CPU_FREQ_GOV_REFLEX" drivers/cpufreq/Kconfig \
   && ok "Reflex Kconfig wired" || fail "Reflex Kconfig missing"
 grep -qE 'obj-[$][(]CONFIG_CPU_FREQ_GOV_REFLEX[)]' drivers/cpufreq/Makefile \
@@ -108,6 +108,27 @@ grep -qF 'simple_gpu_algorithm.o' drivers/devfreq/Makefile \
   && ok "Simple GPU built alongside adreno tz" || fail "Simple GPU missing from devfreq Makefile"
 for opt in CONFIG_BT_RFCOMM=y CONFIG_BT_RFCOMM_TTY=y CONFIG_BT_BNEP=y CONFIG_BT_HIDP=y \
            CONFIG_PM_AUTOSLEEP=y CONFIG_PM_WAKELOCKS_GC=y; do
+  grep -q "$opt" arch/arm64/configs/vendor/xiaomi/miatoll_defconfig \
+    && ok "defconfig: $opt" || fail "defconfig lost $opt"
+done
+[ -e mm/kfence/core.c ] && ok "kfence core present" || fail "kfence core missing"
+[ -e include/linux/kfence.h ] && ok "kfence public header present" || fail "kfence header missing"
+grep -qE 'obj-[$][(]CONFIG_KFENCE[)]' mm/Makefile \
+  && ok "KFENCE wired into mm/Makefile" || fail "KFENCE not in mm/Makefile"
+grep -qF 'lib/Kconfig.kfence' lib/Kconfig.debug \
+  && ok "KFENCE Kconfig sourced" || fail "lib/Kconfig.kfence not sourced"
+grep -q "kfence_handle_page_fault" arch/arm64/mm/fault.c \
+  && ok "arm64 fault hook present" || fail "arm64 fault hook missing"
+grep -q "kfence_alloc" mm/slub.c \
+  && ok "SLUB alloc hook present" || fail "SLUB alloc hook missing"
+grep -q "kfence_free" mm/slub.c \
+  && ok "SLUB free hook present" || fail "SLUB free hook missing"
+grep -q "select HAVE_ARCH_KFENCE" arch/arm64/Kconfig \
+  && ok "arm64 selects HAVE_ARCH_KFENCE" || fail "HAVE_ARCH_KFENCE not selected"
+grep -q "kfence_alloc_pool" init/main.c && grep -q "kfence_init" init/main.c \
+  && ok "KFENCE boot init wired" || fail "KFENCE boot init missing"
+for opt in CONFIG_KFENCE=y CONFIG_KFENCE_STATIC_KEYS=y CONFIG_KFENCE_SAMPLE_INTERVAL=100 \
+           CONFIG_KFENCE_NUM_OBJECTS=255; do
   grep -q "$opt" arch/arm64/configs/vendor/xiaomi/miatoll_defconfig \
     && ok "defconfig: $opt" || fail "defconfig lost $opt"
 done
