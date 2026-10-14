@@ -102,10 +102,16 @@ grep -qE 'obj-[$][(]CONFIG_CPU_FREQ_GOV_REFLEX[)]' drivers/cpufreq/Makefile \
 [ -e drivers/cpufreq/cpufreq_reflex.c ] && ok "cpufreq_reflex.c present" || fail "cpufreq_reflex.c missing"
 grep -q "CONFIG_CPU_FREQ_GOV_REFLEX=y" arch/arm64/configs/vendor/xiaomi/miatoll_defconfig \
   && ok "Reflex enabled in defconfig" || fail "Reflex not enabled in defconfig"
+grep -q "^config CPU_FREQ_DEFAULT_GOV_REFLEX$" drivers/cpufreq/Kconfig \
+  && ok "Reflex default-governor choice present" || fail "CPU_FREQ_DEFAULT_GOV_REFLEX choice missing"
+grep -q "CONFIG_CPU_FREQ_DEFAULT_GOV_REFLEX=y" arch/arm64/configs/vendor/xiaomi/miatoll_defconfig \
+  && ok "Reflex is the default governor (defconfig)" || fail "Reflex default governor lost"
 grep -q "simple_gpu_algorithm" drivers/devfreq/governor_msm_adreno_tz.c \
   && ok "Simple GPU hook in msm_adreno_tz" || fail "Simple GPU hook missing"
 grep -qF 'simple_gpu_algorithm.o' drivers/devfreq/Makefile \
   && ok "Simple GPU built alongside adreno tz" || fail "Simple GPU missing from devfreq Makefile"
+grep -q "^int simple_gpu_active = 1;" drivers/devfreq/simple_gpu_algorithm.c \
+  && ok "Simple GPU active by default" || fail "Simple GPU default is not active"
 for opt in CONFIG_BT_RFCOMM=y CONFIG_BT_RFCOMM_TTY=y CONFIG_BT_BNEP=y CONFIG_BT_HIDP=y \
            CONFIG_PM_AUTOSLEEP=y CONFIG_PM_WAKELOCKS_GC=y; do
   grep -q "$opt" arch/arm64/configs/vendor/xiaomi/miatoll_defconfig \
@@ -170,6 +176,8 @@ for opt in CONFIG_LRU_GEN=y CONFIG_LRU_GEN_ENABLED=y; do
   grep -q "$opt" arch/arm64/configs/vendor/xiaomi/miatoll_defconfig \
     && ok "defconfig: $opt" || fail "defconfig lost $opt"
 done
+grep -q "DEFINE_STATIC_KEY_ARRAY_TRUE(lru_gen_caps" mm/vmscan.c \
+  && ok "gen-LRU caps default-on wiring present" || fail "gen-LRU default-on wiring missing"
 
 echo "== AnyKernel3 installer"
 if bash "$TOP/tools/root-integration/test-ak3.sh" "$TOP/AnyKernel3" >/dev/null 2>&1; then
