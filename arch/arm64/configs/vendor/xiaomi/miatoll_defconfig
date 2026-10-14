@@ -5952,3 +5952,7 @@ CONFIG_KSU_SUSFS_SUS_MAP=y
 
 # ── NoMount v2.1.0 (VFS path redirection, systemless) ──
 CONFIG_NOMOUNT=y
+
+# ── Multi-Gen LRU (MGLRU: de-folio'd FROMLIST-v6 backport + ANDROID fixes) ──
+CONFIG_LRU_GEN=y
+CONFIG_LRU_GEN_ENABLED=y

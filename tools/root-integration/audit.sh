@@ -151,6 +151,26 @@ grep -q "current_is_nswapoutd" mm/swap_slots.c \
 grep -q "CONFIG_NANDSWAP=y" arch/arm64/configs/vendor/xiaomi/miatoll_defconfig \
   && ok "defconfig: CONFIG_NANDSWAP=y" || fail "defconfig lost CONFIG_NANDSWAP=y"
 
+echo "== MGLRU (Multi-Gen LRU)"
+grep -q "^config LRU_GEN$" mm/Kconfig \
+  && ok "LRU_GEN Kconfig present" || fail "mm/Kconfig missing LRU_GEN"
+grep -q "^config LRU_GEN_ENABLED$" mm/Kconfig \
+  && ok "LRU_GEN_ENABLED Kconfig present" || fail "mm/Kconfig missing LRU_GEN_ENABLED"
+grep -q "lru_gen_enabled" mm/vmscan.c \
+  && ok "vmscan gen-LRU core present" || fail "vmscan gen-LRU core missing"
+grep -q "lru_gen_look_around" mm/rmap.c \
+  && ok "rmap locality hook present" || fail "rmap look-around hook missing"
+grep -q "lru_gen_use_mm" include/linux/mm_types.h \
+  && ok "page-table walk mm hook present" || fail "page-table walk mm hook missing"
+grep -q "DEFINE(LRU_GEN_WIDTH" kernel/bounds.c \
+  && ok "kernel/bounds.c reserves page-flag bits" || fail "bounds.c LRU_GEN_WIDTH missing"
+grep -q "struct lru_gen_struct" include/linux/mmzone.h \
+  && ok "lruvec gen-LRU fields present" || fail "lruvec gen-LRU fields missing"
+for opt in CONFIG_LRU_GEN=y CONFIG_LRU_GEN_ENABLED=y; do
+  grep -q "$opt" arch/arm64/configs/vendor/xiaomi/miatoll_defconfig \
+    && ok "defconfig: $opt" || fail "defconfig lost $opt"
+done
+
 echo "== AnyKernel3 installer"
 if bash "$TOP/tools/root-integration/test-ak3.sh" "$TOP/AnyKernel3" >/dev/null 2>&1; then
   ok "flashable zip installer resolves the boot partition"
