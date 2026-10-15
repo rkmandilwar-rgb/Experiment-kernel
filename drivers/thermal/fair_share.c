@@ -52,7 +52,12 @@ static int get_trip_level(struct thermal_zone_device *tz)
 	 */
 	if (count > 0) {
 		tz->ops->get_trip_type(tz, count - 1, &trip_type);
-		trace_thermal_zone_trip(tz, count - 1, trip_type);
+		/*
+		 * This tree's thermal_zone_trip tracepoint carries a fourth
+		 * "is_trip" flag (see step_wise.c / thermal_core.c): the zone
+		 * is above the trip here, so it has been crossed.
+		 */
+		trace_thermal_zone_trip(tz, count - 1, trip_type, true);
 	}
 
 	return count;

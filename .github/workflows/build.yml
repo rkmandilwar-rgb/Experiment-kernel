@@ -11,12 +11,17 @@
 # + CONFIG_INLINE_OPTIMIZATION (see kernel/configs/miatoll/compiler.config).
 #
 # Feature/tuning packs (kernel/configs/miatoll/*.config, merged by
-# scripts/merge-defconfig.sh): eBPF, NTFS(+ntfs3), EROFS, BBRv1, Droidspaces,
-# NetHunter, haptics & sound, Bluetooth, Wi-Fi.
+# scripts/merge-defconfig.sh): eBPF, NTFS(+ntfs3), EROFS, BBRv1 + BBRplus,
+# Droidspaces, NetHunter, compiler/codegen, thermal management, performance
+# scheduler, touch (conservative), audio/speaker, haptics & sound, Bluetooth,
+# Wi-Fi.
 #
 # This pipeline builds and uploads artifacts only.  The release job below is
 # permanently disabled (`if: false`) on purpose: nothing is ever published to
-# the repo's Releases page.
+# the repo's Releases page.  Do not flip it on: this kernel is built for the
+# owner's own device and is deliberately not distributed as a release.
+# The `guard-release-disabled` step below re-checks that guard on every run,
+# so a stray edit turns the build red instead of publishing silently.
 
 name: Build & Release Stormbreaker Kernel
 
@@ -53,6 +58,17 @@ jobs:
       - name: Checkout kernel source
         uses: actions/checkout@v4
 
+      - name: Guard - the release job must stay disabled
+        run: |
+          set -euo pipefail
+          if grep -q '^  release:$' .github/workflows/build.yml &&
+             grep -q '^    if: false$' .github/workflows/build.yml; then
+            echo "ok: the release job is gated with 'if: false' (artifacts only, nothing is published)"
+          else
+            echo "::error::the release job is not gated with 'if: false' - refusing to build"
+            exit 1
+          fi
+
       - name: Report runner resources
         run: |
           echo "::group::Runner"
@@ -71,20 +87,72 @@ jobs:
             gcc-arm-linux-gnueabi
           sudo apt-get install -y --no-install-recommends libtinfo5 || true
 
+      - name: Restore clang ${{ env.LLVM_VER }} from the cache
+        id: clang-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: toolchains/clang-${{ env.LLVM_VER }}
+          # The bundle is ~1.1 GB and the AOSP host is not always reachable;
+          # re-downloading it on every run is both slow and the most common
+          # cause of a red build. Cache it instead.
+          key: clang-${{ env.LLVM_VER }}-${{ runner.os }}
+
+      - name: Check the restored clang toolchain
+        id: clang-check
+        run: |
+          set -euo pipefail
+          DEST="$GITHUB_WORKSPACE/toolchains/clang-${LLVM_VER}"
+          if [ -x "$DEST/bin/clang" ]; then
+            echo "usable=yes" >> "$GITHUB_OUTPUT"
+            echo "using cached clang ${LLVM_VER}:"
+            "$DEST/bin/clang" --version | head -1
+          else
+            rm -rf "$DEST"
+            echo "usable=no" >> "$GITHUB_OUTPUT"
+            echo "no usable clang ${LLVM_VER} in the cache, it will be downloaded"
+          fi
+
       - name: Fetch AOSP clang ${{ env.LLVM_VER }}
+        if: steps.clang-check.outputs.usable != 'yes'
         run: |
           set -euo pipefail
           DEST="$GITHUB_WORKSPACE/toolchains/clang-${LLVM_VER}"
           mkdir -p "$DEST"
-          for url in "$CLANG_URL_MIRROR" "$CLANG_URL_AOSP"; do
-            echo "==> trying $url"
-            if curl -fL --retry 3 --retry-delay 5 --connect-timeout 30 -o clang.tar.gz "$url"; then
-              tar -xzf clang.tar.gz -C "$DEST" && rm -f clang.tar.gz && break
-            fi
-            rm -f clang.tar.gz
+          fetched=0
+          for attempt in 1 2 3; do
+            for url in "$CLANG_URL_MIRROR" "$CLANG_URL_AOSP"; do
+              echo "==> attempt ${attempt}: $url"
+              if curl -fL --retry 5 --retry-all-errors --retry-delay 5 \
+                      --connect-timeout 30 --max-time 1800 \
+                      -o clang.tar.gz "$url"; then
+                if tar -xzf clang.tar.gz -C "$DEST"; then
+                  rm -f clang.tar.gz
+                  fetched=1
+                  break 2
+                fi
+              fi
+              rm -f clang.tar.gz
+              sleep 15
+            done
           done
-          test -x "$DEST/bin/clang" || { echo "::error::could not fetch clang ${LLVM_VER}"; exit 1; }
+          [ "$fetched" = 1 ] || { echo "::error::could not fetch clang ${LLVM_VER}"; exit 1; }
+          test -x "$DEST/bin/clang" \
+            || { echo "::error::clang ${LLVM_VER} archive is incomplete"; exit 1; }
           "$DEST/bin/clang" --version | head -3
+
+      - name: Save clang ${{ env.LLVM_VER }} to the cache
+        if: steps.clang-check.outputs.usable != 'yes'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: toolchains/clang-${{ env.LLVM_VER }}
+          key: clang-${{ env.LLVM_VER }}-${{ runner.os }}
+
+      - name: Put clang on PATH
+        run: |
+          set -euo pipefail
+          DEST="$GITHUB_WORKSPACE/toolchains/clang-${LLVM_VER}"
+          test -x "$DEST/bin/clang" || { echo "::error::clang ${LLVM_VER} is missing"; exit 1; }
           echo "$DEST/bin" >> "$GITHUB_PATH"
 
       - name: Verify toolchain and Polly
@@ -188,6 +256,15 @@ jobs:
           require 'CONFIG_TCP_CONG_BBR=y'
           require 'CONFIG_DEFAULT_TCP_CONG="bbr"'
           require 'CONFIG_NET_SCH_FQ=y'
+
+          # BBRplus (enhanced BBR v1) built in next to stock BBR
+          require 'CONFIG_TCP_CONG_BBRPLUS=y'
+          test -f net/ipv4/tcp_bbrplus.c \
+            || { echo "::error::BBRplus source missing"; exit 1; }
+          grep -q 'name[[:space:]]*=[[:space:]]*"bbrplus"' net/ipv4/tcp_bbrplus.c \
+            || { echo "::error::BBRplus registers the wrong TCP CA name"; exit 1; }
+          grep -q 'ICSK_CA_PRIV_SIZE      (14 \* sizeof(u64))' include/net/inet_connection_sock.h \
+            || { echo "::error::icsk_ca_priv is too small for the BBRplus control block"; exit 1; }
 
           # Droidspaces / namespaces
           require 'CONFIG_SYSVIPC=y'
@@ -321,6 +398,18 @@ jobs:
             || { echo "::error::AW8624 ulevel control missing"; exit 1; }
           grep -q 'if (val > 128)' drivers/misc/aw8624_haptic/aw8624.c \
             || { echo "::error::AW8624 ulevel range check missing"; exit 1; }
+          # aw8624_gain_store() must reject values the 8-bit gain register
+          # cannot hold instead of silently truncating them.
+          grep -q 'if (val > 0xFF)' drivers/misc/aw8624_haptic/aw8624.c \
+            || { echo "::error::AW8624 gain range check missing"; exit 1; }
+          # seq/loop take a userspace-supplied index into an 8-entry array.
+          test "$(grep -c 'databuf\[0\] >= AW8624_SEQUENCER_SIZE' drivers/misc/aw8624_haptic/aw8624.c)" -ge 2 \
+            || { echo "::error::AW8624 seq/loop index bounds check missing"; exit 1; }
+          # FF_GAIN is advertised as a capability, so it must not be a stub.
+          grep -q 'static void aw8624_haptics_set_gain(struct input_dev \*dev, u16 gain)' drivers/misc/aw8624_haptic/aw8624.c \
+            || { echo "::error::AW8624 force-feedback gain handler missing"; exit 1; }
+          grep -q 'aw8624_haptic_set_gain(aw8624, level)' drivers/misc/aw8624_haptic/aw8624.c \
+            || { echo "::error::AW8624 force-feedback gain is not applied"; exit 1; }
 
           # Bluetooth tuning: internal WCN3990 goes through hci_qca
           require 'CONFIG_BT_HCIUART=y'
@@ -333,6 +422,71 @@ jobs:
           require 'CONFIG_BT_HCIBTUSB_BCM=y'
           require 'CONFIG_BT_HCIBTUSB_RTL=y'
           require 'CONFIG_BT_BNEP_PROTO_FILTER=y'
+
+          # Thermal management pack
+          require 'CONFIG_THERMAL=y'
+          require 'CONFIG_THERMAL_OF=y'
+          require 'CONFIG_THERMAL_HWMON=y'
+          require 'CONFIG_THERMAL_WRITABLE_TRIPS=y'
+          require 'CONFIG_THERMAL_DEFAULT_GOV_STEP_WISE=y'
+          require 'CONFIG_THERMAL_GOV_STEP_WISE=y'
+          require 'CONFIG_THERMAL_GOV_LOW_LIMITS=y'
+          require 'CONFIG_THERMAL_GOV_USER_SPACE=y'
+          require 'CONFIG_CPU_THERMAL=y'
+          require 'CONFIG_DEVFREQ_THERMAL=y'
+          require 'CONFIG_CLOCK_THERMAL=y'
+          require 'CONFIG_REGULATOR_COOLING_DEVICE=y'
+          require 'CONFIG_THERMAL_TSENS=y'
+          require 'CONFIG_QTI_VIRTUAL_SENSOR=y'
+          require 'CONFIG_QTI_QMI_SENSOR=y'
+          require 'CONFIG_QTI_QMI_COOLING_DEVICE=y'
+          require 'CONFIG_QTI_AOP_REG_COOLING_DEVICE=y'
+          require 'CONFIG_QTI_ADC_TM=y'
+          require 'CONFIG_QTI_BCL_PMIC5=y'
+          require 'CONFIG_QTI_BCL_SOC_DRIVER=y'
+          require_off 'CONFIG_THERMAL_EMULATION'
+
+          # Performance scheduler pack (CASS + WALT/schedtune + touch boost)
+          require 'CONFIG_SCHED_CASS=y'
+          require 'CONFIG_SCHED_WALT=y'
+          require 'CONFIG_SCHED_TUNE=y'
+          require 'CONFIG_SCHED_CORE_CTL=y'
+          require 'CONFIG_SCHED_MC=y'
+          require 'CONFIG_SCHED_HRTICK=y'
+          require 'CONFIG_DEFAULT_USE_ENERGY_AWARE=y'
+          require 'CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y'
+          require 'CONFIG_CPU_BOOST=y'
+          grep -q 'cass_select_task_rq_fair' kernel/sched/cass.c \
+            || { echo "::error::CASS scheduler source missing"; exit 1; }
+
+          # Touch pack (conservative): the two miatoll panels, nothing else
+          require 'CONFIG_INPUT_TOUCHSCREEN=y'
+          require 'CONFIG_INPUT_EVDEV=y'
+          require 'CONFIG_TOUCHSCREEN_FTS_SPI=y'
+          require 'CONFIG_TOUCHSCREEN_NT36xxx_HOSTDL_SPI=y'
+          require 'CONFIG_TOUCHSCREEN_PROPERTIES=y'
+          require_off 'CONFIG_TOUCHSCREEN_FTS'
+          require_off 'CONFIG_TOUCHSCREEN_NT36xxx_HOSTDL_SPI_C3X'
+
+          # Speaker / audio pack (the amp + codec live in techpack/audio)
+          require 'CONFIG_SND=y'
+          require 'CONFIG_SND_SOC=y'
+          require 'CONFIG_SND_SOC_I2C_AND_SPI=y'
+          require 'CONFIG_SND_HRTIMER=y'
+          require 'CONFIG_SND_PCM_TIMER=y'
+          require 'CONFIG_SND_DYNAMIC_MINORS=y'
+          require 'CONFIG_SND_COMPRESS_OFFLOAD=y'
+          require 'CONFIG_SND_SOC_COMPRESS=y'
+          require 'CONFIG_SND_JACK=y'
+          require 'CONFIG_SND_USB_AUDIO=y'
+          # The TAS2562 speaker amp and the WCD937x codec are built by
+          # techpack/audio for ARCH_ATOLL; assert the wiring is still there.
+          test -f techpack/audio/4.0/asoc/codecs/tas2562/tas2562-codec.c \
+            || { echo "::error::TAS2562 speaker amp source missing"; exit 1; }
+          grep -q 'tas2562/' techpack/audio/4.0/asoc/codecs/Kbuild \
+            || { echo "::error::TAS2562 speaker amp is not built in-kernel"; exit 1; }
+          grep -q 'CONFIG_SND_SOC_TAS2562=y' techpack/audio/4.0/config/atollauto.conf \
+            || { echo "::error::TAS2562 speaker amp disabled in atollauto.conf"; exit 1; }
 
           # Wi-Fi tuning
           require 'CONFIG_CFG80211_INTERNAL_REGDB=y'
@@ -538,15 +692,46 @@ jobs:
           ### EROFS (Enhanced Read-Only File System)
           - \`EROFS_FS=y\` with LZ4 compression, xattrs, ACLs, security labels
 
-          ### BBRv1 congestion control
+          ### BBRv1 + BBRplus congestion control
           - BBR v1 as default TCP congestion control (\`DEFAULT_TCP_CONG="bbr"\`)
+          - **BBRplus** built in next to it (\`CONFIG_TCP_CONG_BBRPLUS=y\`):
+            the later upstream BBR v1 work (ACK aggregation, drain-to-target
+            gain cycling) plus a far more tolerant loss-policer detector,
+            which behaves better on LTE/mobile paths.
+            \`echo bbrplus > /proc/sys/net/ipv4/tcp_congestion_control\`
           - fq pacing qdisc (\`NET_SCH_FQ=y\`)
+
+          ### Thermal management
+          - Full QTI thermal stack: TSENS, PMIC temp alarm, QMI sensors, ADC
+            thermal monitor, virtual sensors, LMH DCVS
+          - Cooling devices: CPU (cpufreq), GPU/devfreq, clocks, AOP/RPM
+            regulators, BCL battery current limiters
+          - \`step_wise\` default governor with writable trips; emulation off
+
+          ### Performance scheduler
+          - **CASS** (capacity aware superset scheduler) replaces the CFS
+            wake-up CPU selection: relative-utilization placement, capacity
+            fit, sync-wake locality, exit latency and cache affinity
+          - WALT + schedtune + core_ctl + schedutil, 40 ms touch boost
+
+          ### Touch (conservative)
+          - Only the panels miatoll ships: FocalTech FT8756 SPI and Novatek
+            NT36xxx SPI, plus the Xiaomi touch properties
+          - The duplicate generic FocalTech driver and the NT36xxx C3X
+            variant stay disabled so two drivers cannot claim one panel
+
+          ### Speaker / audio
+          - ALSA/ASoC core tuned for the speaker path: hrtimer period timing,
+            dynamic minors, compress offload, jack detection
+          - **TAS2562** smart speaker amp and WCD937x codec (techpack/audio,
+            ARCH_ATOLL) with the current/voltage sense slots the DTS declares
 
           ### Haptics, Bluetooth, Wi-Fi tuning
           - **Haptics:** AW8624 vibrator workqueue runs at high priority (buzz
             onset is not queued behind ordinary work); \`ulevel\` sysfs ceiling
             (0..128) for userspace strength control; DRV2624 fallback;
-            force-feedback input layer; ALSA hrtimer + compress offload
+            force-feedback input layer with a working FF_GAIN handler; ALSA
+            hrtimer + compress offload
           - **Bluetooth:** QCA UART protocol (\`hci_qca\`) for the internal
             WCN3990 — in-band sleep / UART clock control; virtual HCI for
             btmon/btsnoop; BNEP filters for tethering; btusb BCM/RTL
