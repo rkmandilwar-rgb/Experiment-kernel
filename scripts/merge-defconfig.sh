@@ -34,6 +34,10 @@ frags=(
     kernel/configs/miatoll/droidspaces.config
     kernel/configs/miatoll/nethunter.config
     kernel/configs/miatoll/compiler.config
+    kernel/configs/miatoll/thermal.config
+    kernel/configs/miatoll/scheduler.config
+    kernel/configs/miatoll/touch.config
+    kernel/configs/miatoll/audio.config
     kernel/configs/miatoll/haptics-sound.config
     kernel/configs/miatoll/bluetooth.config
     kernel/configs/miatoll/wifi.config

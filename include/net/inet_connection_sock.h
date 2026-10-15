@@ -142,8 +142,10 @@ struct inet_connection_sock {
 	} icsk_mtup;
 	u32			  icsk_user_timeout;
 
-	u64			  icsk_ca_priv[88 / sizeof(u64)];
-#define ICSK_CA_PRIV_SIZE      (11 * sizeof(u64))
+	u64			  icsk_ca_priv[112 / sizeof(u64)];
+/* 112 bytes: enough for the BBRplus congestion control block (tcp_bbrplus.c,
+ * 108 bytes) as well as everything else that uses icsk_ca_priv. */
+#define ICSK_CA_PRIV_SIZE      (14 * sizeof(u64))
 };
 
 #define ICSK_TIME_RETRANS	1	/* Retransmit timer */

@@ -11,12 +11,17 @@
 # + CONFIG_INLINE_OPTIMIZATION (see kernel/configs/miatoll/compiler.config).
 #
 # Feature/tuning packs (kernel/configs/miatoll/*.config, merged by
-# scripts/merge-defconfig.sh): eBPF, NTFS(+ntfs3), EROFS, BBRv1, Droidspaces,
-# NetHunter, haptics & sound, Bluetooth, Wi-Fi.
+# scripts/merge-defconfig.sh): eBPF, NTFS(+ntfs3), EROFS, BBRv1 + BBRplus,
+# Droidspaces, NetHunter, compiler/codegen, thermal management, performance
+# scheduler, touch (conservative), audio/speaker, haptics & sound, Bluetooth,
+# Wi-Fi.
 #
 # This pipeline builds and uploads artifacts only.  The release job below is
 # permanently disabled (`if: false`) on purpose: nothing is ever published to
-# the repo's Releases page.
+# the repo's Releases page.  Do not flip it on: this kernel is built for the
+# owner's own device and is deliberately not distributed as a release.
+# The `guard-release-disabled` step below re-checks that guard on every run,
+# so a stray edit turns the build red instead of publishing silently.
 
 name: Build & Release Stormbreaker Kernel
 
@@ -52,6 +57,17 @@ jobs:
     steps:
       - name: Checkout kernel source
         uses: actions/checkout@v4
+
+      - name: Guard - the release job must stay disabled
+        run: |
+          set -euo pipefail
+          if grep -q '^  release:$' .github/workflows/build.yml &&
+             grep -q '^    if: false$' .github/workflows/build.yml; then
+            echo "ok: the release job is gated with 'if: false' (artifacts only, nothing is published)"
+          else
+            echo "::error::the release job is not gated with 'if: false' - refusing to build"
+            exit 1
+          fi
 
       - name: Report runner resources
         run: |
@@ -188,6 +204,15 @@ jobs:
           require 'CONFIG_TCP_CONG_BBR=y'
           require 'CONFIG_DEFAULT_TCP_CONG="bbr"'
           require 'CONFIG_NET_SCH_FQ=y'
+
+          # BBRplus (enhanced BBR v1) built in next to stock BBR
+          require 'CONFIG_TCP_CONG_BBRPLUS=y'
+          test -f net/ipv4/tcp_bbrplus.c \
+            || { echo "::error::BBRplus source missing"; exit 1; }
+          grep -q 'name[[:space:]]*=[[:space:]]*"bbrplus"' net/ipv4/tcp_bbrplus.c \
+            || { echo "::error::BBRplus registers the wrong TCP CA name"; exit 1; }
+          grep -q 'ICSK_CA_PRIV_SIZE      (14 \* sizeof(u64))' include/net/inet_connection_sock.h \
+            || { echo "::error::icsk_ca_priv is too small for the BBRplus control block"; exit 1; }
 
           # Droidspaces / namespaces
           require 'CONFIG_SYSVIPC=y'
@@ -333,6 +358,71 @@ jobs:
           require 'CONFIG_BT_HCIBTUSB_BCM=y'
           require 'CONFIG_BT_HCIBTUSB_RTL=y'
           require 'CONFIG_BT_BNEP_PROTO_FILTER=y'
+
+          # Thermal management pack
+          require 'CONFIG_THERMAL=y'
+          require 'CONFIG_THERMAL_OF=y'
+          require 'CONFIG_THERMAL_HWMON=y'
+          require 'CONFIG_THERMAL_WRITABLE_TRIPS=y'
+          require 'CONFIG_THERMAL_DEFAULT_GOV_STEP_WISE=y'
+          require 'CONFIG_THERMAL_GOV_STEP_WISE=y'
+          require 'CONFIG_THERMAL_GOV_LOW_LIMITS=y'
+          require 'CONFIG_THERMAL_GOV_USER_SPACE=y'
+          require 'CONFIG_CPU_THERMAL=y'
+          require 'CONFIG_DEVFREQ_THERMAL=y'
+          require 'CONFIG_CLOCK_THERMAL=y'
+          require 'CONFIG_REGULATOR_COOLING_DEVICE=y'
+          require 'CONFIG_THERMAL_TSENS=y'
+          require 'CONFIG_QTI_VIRTUAL_SENSOR=y'
+          require 'CONFIG_QTI_QMI_SENSOR=y'
+          require 'CONFIG_QTI_QMI_COOLING_DEVICE=y'
+          require 'CONFIG_QTI_AOP_REG_COOLING_DEVICE=y'
+          require 'CONFIG_QTI_ADC_TM=y'
+          require 'CONFIG_QTI_BCL_PMIC5=y'
+          require 'CONFIG_QTI_BCL_SOC_DRIVER=y'
+          require_off 'CONFIG_THERMAL_EMULATION'
+
+          # Performance scheduler pack (CASS + WALT/schedtune + touch boost)
+          require 'CONFIG_SCHED_CASS=y'
+          require 'CONFIG_SCHED_WALT=y'
+          require 'CONFIG_SCHED_TUNE=y'
+          require 'CONFIG_SCHED_CORE_CTL=y'
+          require 'CONFIG_SCHED_MC=y'
+          require 'CONFIG_SCHED_HRTICK=y'
+          require 'CONFIG_DEFAULT_USE_ENERGY_AWARE=y'
+          require 'CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y'
+          require 'CONFIG_CPU_BOOST=y'
+          grep -q 'cass_select_task_rq_fair' kernel/sched/cass.c \
+            || { echo "::error::CASS scheduler source missing"; exit 1; }
+
+          # Touch pack (conservative): the two miatoll panels, nothing else
+          require 'CONFIG_INPUT_TOUCHSCREEN=y'
+          require 'CONFIG_INPUT_EVDEV=y'
+          require 'CONFIG_TOUCHSCREEN_FTS_SPI=y'
+          require 'CONFIG_TOUCHSCREEN_NT36xxx_HOSTDL_SPI=y'
+          require 'CONFIG_TOUCHSCREEN_PROPERTIES=y'
+          require_off 'CONFIG_TOUCHSCREEN_FTS'
+          require_off 'CONFIG_TOUCHSCREEN_NT36xxx_HOSTDL_SPI_C3X'
+
+          # Speaker / audio pack (the amp + codec live in techpack/audio)
+          require 'CONFIG_SND=y'
+          require 'CONFIG_SND_SOC=y'
+          require 'CONFIG_SND_SOC_I2C_AND_SPI=y'
+          require 'CONFIG_SND_HRTIMER=y'
+          require 'CONFIG_SND_PCM_TIMER=y'
+          require 'CONFIG_SND_DYNAMIC_MINORS=y'
+          require 'CONFIG_SND_COMPRESS_OFFLOAD=y'
+          require 'CONFIG_SND_SOC_COMPRESS=y'
+          require 'CONFIG_SND_JACK=y'
+          require 'CONFIG_SND_USB_AUDIO=y'
+          # The TAS2562 speaker amp and the WCD937x codec are built by
+          # techpack/audio for ARCH_ATOLL; assert the wiring is still there.
+          test -f techpack/audio/4.0/asoc/codecs/tas2562/tas2562-codec.c \
+            || { echo "::error::TAS2562 speaker amp source missing"; exit 1; }
+          grep -q 'tas2562/' techpack/audio/4.0/asoc/codecs/Kbuild \
+            || { echo "::error::TAS2562 speaker amp is not built in-kernel"; exit 1; }
+          grep -q 'CONFIG_SND_SOC_TAS2562=y' techpack/audio/4.0/config/atollauto.conf \
+            || { echo "::error::TAS2562 speaker amp disabled in atollauto.conf"; exit 1; }
 
           # Wi-Fi tuning
           require 'CONFIG_CFG80211_INTERNAL_REGDB=y'
