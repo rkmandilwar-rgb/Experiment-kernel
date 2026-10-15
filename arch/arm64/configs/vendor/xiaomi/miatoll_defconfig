@@ -5928,3 +5928,12 @@ CONFIG_RMNET_SHS=y
 #   compiler (Polly + Clang LTO/ThinLTO + inlining),
 #   haptics-sound, bluetooth, wifi
 #
+
+# KernelSU-Next
+CONFIG_KSU=y
+# CONFIG_KSU_DEBUG is not set
+# CONFIG_KSU_DISABLE_MANAGER is not set
+# CONFIG_KSU_DISABLE_POLICY is not set
+# CONFIG_KSU_ALLOWLIST_WORKAROUND is not set
+# CONFIG_KSU_MANUAL_HOOK is not set
+CONFIG_KSU_SYSCALL_TABLE_HOOK=y
