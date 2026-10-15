@@ -1,0 +1,81 @@
+2930:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+2936:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+2945:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/core/init.o] Error 1
+2955:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+2961:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+2970:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/policy/allowlist.o] Error 1
+2976:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+2982:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+2991:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/policy/app_profile.o] Error 1
+3000:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3006:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3015:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/feature/sucompat.o] Error 1
+3019:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3025:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3034:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/feature/kernel_umount.o] Error 1
+3042:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3048:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3057:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/feature/adb_root.o] Error 1
+3062:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3068:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3077:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/feature/selinux_hide.o] Error 1
+3083:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3089:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3098:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/feature/module_load_filter.o] Error 1
+3104:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3110:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3119:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/hook/setuid_hook.o] Error 1
+3125:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3131:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3140:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/feature/dynamic_manager.o] Error 1
+3146:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3152:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3161:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/manager/apk_sign.o] Error 1
+3168:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3174:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3183:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/manager/throne_tracker.o] Error 1
+3188:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3194:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3203:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/manager/manager.o] Error 1
+3209:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3215:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3224:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/compat/kernel_compat.o] Error 1
+3230:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3236:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3245:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/infra/su_mount_ns.o] Error 1
+3251:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3257:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3266:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/infra/file_wrapper.o] Error 1
+3272:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3278:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3287:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/infra/event_queue.o] Error 1
+3295:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3301:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3310:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/runtime/ksud_integration.o] Error 1
+3316:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3322:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3331:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/selinux/selinux.o] Error 1
+3336:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3342:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3351:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/selinux/sepolicy.o] Error 1
+3359:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3365:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3374:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/sulog/event.o] Error 1
+3382:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3388:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3397:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/supercall/dispatch.o] Error 1
+3404:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3410:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3419:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/supercall/perm.o] Error 1
+3425:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3431:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3440:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/supercall/supercall.o] Error 1
+3450:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3456:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3465:make[3]: *** [../scripts/Makefile.build:364: drivers/kernelsu/infra/symbol_resolver.o] Error 1
+3470:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected identifier or '('
+3476:../drivers/kernelsu/compat/kernel_compat.h:184:20: error: expected ')'
+3485:make[3]: *** [../scripts/Makefile.build:365: drivers/kernelsu/hook/lsm_hooks.o] Error 1
+3487:make[2]: *** [../scripts/Makefile.build:668: drivers/kernelsu] Error 2
+6143:make[1]: *** [/home/runner/work/Experiment-kernel/Experiment-kernel/Makefile:1313: drivers] Error 2
+6146:make: *** [Makefile:153: sub-make] Error 2
