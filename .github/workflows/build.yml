@@ -346,6 +346,18 @@ jobs:
             || { echo "::error::AW8624 ulevel control missing"; exit 1; }
           grep -q 'if (val > 128)' drivers/misc/aw8624_haptic/aw8624.c \
             || { echo "::error::AW8624 ulevel range check missing"; exit 1; }
+          # aw8624_gain_store() must reject values the 8-bit gain register
+          # cannot hold instead of silently truncating them.
+          grep -q 'if (val > 0xFF)' drivers/misc/aw8624_haptic/aw8624.c \
+            || { echo "::error::AW8624 gain range check missing"; exit 1; }
+          # seq/loop take a userspace-supplied index into an 8-entry array.
+          test "$(grep -c 'databuf\[0\] >= AW8624_SEQUENCER_SIZE' drivers/misc/aw8624_haptic/aw8624.c)" -ge 2 \
+            || { echo "::error::AW8624 seq/loop index bounds check missing"; exit 1; }
+          # FF_GAIN is advertised as a capability, so it must not be a stub.
+          grep -q 'static void aw8624_haptics_set_gain(struct input_dev \*dev, u16 gain)' drivers/misc/aw8624_haptic/aw8624.c \
+            || { echo "::error::AW8624 force-feedback gain handler missing"; exit 1; }
+          grep -q 'aw8624_haptic_set_gain(aw8624, level)' drivers/misc/aw8624_haptic/aw8624.c \
+            || { echo "::error::AW8624 force-feedback gain is not applied"; exit 1; }
 
           # Bluetooth tuning: internal WCN3990 goes through hci_qca
           require 'CONFIG_BT_HCIUART=y'

@@ -2820,7 +2820,27 @@ static int aw8624_haptics_erase(struct input_dev *dev, int effect_id)
 
 static void aw8624_haptics_set_gain(struct input_dev *dev, u16 gain)
 {
-	pr_debug("%s enter\n", __func__);
+	struct aw8624 *aw8624 = input_get_drvdata(dev);
+	unsigned int level;
+
+	if (!aw8624)
+		return;
+
+	/*
+	 * FF_GAIN is a 0..0xffff master gain, while the chip's gain register
+	 * (AW8624_REG_DATDBG) is 8-bit.  Fold the requested gain into that
+	 * range and hand it to the same setter everything else uses, so the
+	 * user ceiling (ulevel) still applies on top instead of being
+	 * bypassed by whatever a game requests.
+	 */
+	level = (unsigned int)gain * 0xFF / 0xFFFF;
+
+	VIB_DEBUG("%s: ff gain 0x%04x -> level 0x%02x (ulevel %d)",
+		  __func__, gain, level, aw8624->ulevel);
+
+	mutex_lock(&aw8624->lock);
+	aw8624_haptic_set_gain(aw8624, level);
+	mutex_unlock(&aw8624->lock);
 }
 
 static ssize_t aw8624_activate_test_show(struct device *dev,
@@ -3245,6 +3265,15 @@ static ssize_t aw8624_gain_store(struct device *dev,
 	if (rc < 0)
 		return rc;
 
+	/*
+	 * aw8624->gain is an int but the register is 8-bit, and
+	 * aw8624_haptic_set_gain() takes an unsigned char: without this check
+	 * "echo 512 > gain" would silently truncate to 0x00 (silent
+	 * vibrator) while the value read back still says 512.
+	 */
+	if (val > 0xFF)
+		return -ERANGE;
+
 	pr_debug("%s: value=%d\n", __FUNCTION__, val);
 
 	mutex_lock(&aw8624->lock);
@@ -3313,6 +3342,13 @@ static ssize_t aw8624_seq_store(struct device *dev,
 	unsigned int databuf[2] = { 0, 0 };
 
 	if (2 == sscanf(buf, "%x %x", &databuf[0], &databuf[1])) {
+		/* The index comes straight from userspace: aw8624->seq[] only
+		 * has AW8624_SEQUENCER_SIZE entries, so a larger index would
+		 * corrupt whatever follows it in the driver struct.
+		 */
+		if (databuf[0] >= AW8624_SEQUENCER_SIZE)
+			return -EINVAL;
+
 		pr_debug("%s: seq%d=0x%x\n", __FUNCTION__, databuf[0],
 			 databuf[1]);
 		mutex_lock(&aw8624->lock);
@@ -3356,6 +3392,12 @@ static ssize_t aw8624_loop_store(struct device *dev,
 	unsigned int databuf[2] = { 0, 0 };
 
 	if (2 == sscanf(buf, "%x %x", &databuf[0], &databuf[1])) {
+		/* Same userspace-supplied index as the seq attribute: keep it
+		 * inside aw8624->loop[AW8624_SEQUENCER_SIZE].
+		 */
+		if (databuf[0] >= AW8624_SEQUENCER_SIZE)
+			return -EINVAL;
+
 		pr_debug("%s: seq%d loop=0x%x\n", __FUNCTION__, databuf[0],
 			 databuf[1]);
 		mutex_lock(&aw8624->lock);
