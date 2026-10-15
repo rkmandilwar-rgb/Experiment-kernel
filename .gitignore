@@ -1,3 +1,4 @@
 *
-!ci-logs/
 !.gitignore
+!ci-logs/
+!ci-logs/**

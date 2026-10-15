@@ -1,0 +1,4 @@
+2869:/home/runner/work/Experiment-kernel/Experiment-kernel/KernelSU/kernel/tools/static_export_check.mk:17: *** You should integrate BakaSU in your kernel. .  Stop.
+2870:make[2]: *** [../scripts/Makefile.build:668: drivers/kernelsu] Error 2
+5612:make[1]: *** [/home/runner/work/Experiment-kernel/Experiment-kernel/Makefile:1313: drivers] Error 2
+5615:make: *** [Makefile:153: sub-make] Error 2
