@@ -12,9 +12,17 @@
 #
 # Feature/tuning packs (kernel/configs/miatoll/*.config, merged by
 # scripts/merge-defconfig.sh): eBPF, NTFS(+ntfs3), EROFS, BBRv1 + BBRplus,
-# Droidspaces, NetHunter, compiler/codegen, thermal management, performance
-# scheduler, touch (conservative), audio/speaker, haptics & sound, Bluetooth,
-# Wi-Fi.
+# Droidspaces, NetHunter, KernelSU-Next + SUSFS v2.3.0, compiler/codegen,
+# thermal management, performance scheduler, touch (conservative),
+# audio/speaker, haptics & sound, Bluetooth, Wi-Fi.
+#
+# KernelSU-Next (v3.4.0) is vendored in-tree at drivers/kernelsu - it is not a
+# git submodule any more - because SUSFS v2.3.0 needs a KernelSU driver that
+# carries the matching susfs supercalls/selinux hooks, which upstream does not
+# ship.  The kernel half is fs/susfs.c + include/linux/susfs{,_def}.h, hooked
+# into namei/namespace/stat/statfs/readdir/proc/task_mmu/kallsyms/...  The
+# version in include/linux/susfs.h and the driver must stay in lockstep; the
+# config-verification step below asserts both.
 #
 # This pipeline builds and uploads artifacts only.  The release job below is
 # permanently disabled (`if: false`) on purpose: nothing is ever published to
@@ -57,6 +65,8 @@ jobs:
     steps:
       - name: Checkout kernel source
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Guard - the release job must stay disabled
         run: |
@@ -383,6 +393,92 @@ jobs:
           require 'CONFIG_EROFS_FS_ZIP=y'
           require 'CONFIG_LZ4_DECOMPRESS=y'
 
+          # KernelSU-Next + SUSFS v2.3.0 (addon root hiding)
+          require 'CONFIG_KSU=y'
+          require 'CONFIG_KSU_KPROBES_HOOK=y'
+          require 'CONFIG_KSU_SUSFS=y'
+          require 'CONFIG_KSU_SUSFS_SUS_PATH=y'
+          require 'CONFIG_KSU_SUSFS_SUS_MOUNT=y'
+          require 'CONFIG_KSU_SUSFS_SUS_KSTAT=y'
+          require 'CONFIG_KSU_SUSFS_TRY_UMOUNT=y'
+          require 'CONFIG_KSU_SUSFS_SPOOF_UNAME=y'
+          require 'CONFIG_KSU_SUSFS_ENABLE_LOG=y'
+          require 'CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y'
+          require 'CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y'
+          require 'CONFIG_KSU_SUSFS_OPEN_REDIRECT=y'
+          require 'CONFIG_KSU_SUSFS_SUS_MAP=y'
+          # sus_memfd is experimental and needs the __cleanup() backport:
+          # assert it stays off instead of silently half-enabling it.
+          require_off 'CONFIG_KSU_SUSFS_SUS_MEMFD'
+          # susfs needs the FUSE headers for the /sdcard inode hooks
+          require 'CONFIG_FUSE_FS=y'
+
+          # -- The version, the kernel half and every hook site must be real --
+          # A build where only the config says "susfs" but the sources are not
+          # wired up is the exact failure this guards against.
+          grep -qx '#define SUSFS_VERSION "v2.3.0"' include/linux/susfs.h \
+            || { echo "::error::include/linux/susfs.h is not SUSFS v2.3.0"; exit 1; }
+          grep -q 'SUSFS_VERSION' drivers/kernelsu/Makefile \
+            || { echo "::error::the KernelSU driver does not know about susfs"; exit 1; }
+          test -f fs/susfs.c \
+            || { echo "::error::fs/susfs.c is missing"; exit 1; }
+          grep -q 'susfs.o' fs/Makefile \
+            || { echo "::error::fs/susfs.c is not built (fs/Makefile)"; exit 1; }
+
+          # KernelSU -> susfs wiring (supercall dispatch, init, setuid path)
+          grep -q 'susfs_init' drivers/kernelsu/core/init.c \
+            || { echo "::error::susfs_init() is never called by KernelSU"; exit 1; }
+          grep -q 'susfs_try_umount' drivers/kernelsu/hook/setuid_hook.c \
+            || { echo "::error::KernelSU does not run susfs try_umount"; exit 1; }
+          grep -q 'susfs_start_sdcard_monitor_fn' drivers/kernelsu/supercall/dispatch.c \
+            || { echo "::error::KernelSU does not start the susfs sdcard monitor"; exit 1; }
+          grep -q 'susfs_is_current_ksu_domain' drivers/kernelsu/selinux/selinux.c \
+            || { echo "::error::susfs ksu domain helper missing in KernelSU"; exit 1; }
+
+          # Kernel -> susfs hook sites
+          grep -q 'susfs_is_inode_sus_path' fs/namei.c \
+            || { echo "::error::SUS_PATH hook missing in fs/namei.c"; exit 1; }
+          grep -q 'susfs_is_inode_sus_path' fs/readdir.c \
+            || { echo "::error::SUS_PATH getdents hook missing in fs/readdir.c"; exit 1; }
+          grep -q 'susfs_get_non_sus_mnt_id_from_mnt' fs/namespace.c \
+            || { echo "::error::SUS_MOUNT helpers missing in fs/namespace.c"; exit 1; }
+          grep -q 'susfs_show_vfsmnt' fs/proc_namespace.c \
+            || { echo "::error::SUS_MOUNT mountinfo spoofer missing"; exit 1; }
+          grep -q 'susfs_statfs_by_dentry' fs/statfs.c \
+            || { echo "::error::SUS_KSTAT statfs spoofer missing"; exit 1; }
+          grep -q 'susfs_generic_fillattr_spoofer' fs/stat.c \
+            || { echo "::error::SUS_KSTAT kstat spoofer missing in fs/stat.c"; exit 1; }
+          grep -q 'susfs_open_redirect_spoof_do_sys_openat' fs/open.c \
+            || { echo "::error::OPEN_REDIRECT hook missing in fs/open.c"; exit 1; }
+          grep -q 'SUSFS_IS_INODE_SUS_MAP' fs/proc/task_mmu.c \
+            || { echo "::error::SUS_MAP hook missing in fs/proc/task_mmu.c"; exit 1; }
+          grep -q 'SUSFS_IS_INODE_SUS_MAP' mm/memory.c \
+            || { echo "::error::SUS_MAP hook missing in mm/memory.c"; exit 1; }
+          grep -q 'susfs_spoof_cmdline_or_bootconfig' fs/proc/cmdline.c \
+            || { echo "::error::cmdline spoofer missing in fs/proc/cmdline.c"; exit 1; }
+          grep -q 'susfs_spoof_uname' kernel/sys.c \
+            || { echo "::error::uname spoofer missing in kernel/sys.c"; exit 1; }
+          grep -q 'susfs_starts_with' kernel/kallsyms.c \
+            || { echo "::error::kallsyms symbol hider missing"; exit 1; }
+          grep -q 'susfs_sus_kstat_spoof_inotify_fdinfo' fs/notify/fdinfo.c \
+            || { echo "::error::inotify fdinfo spoofer missing"; exit 1; }
+          grep -q 'susfs_mnt_id_backup' include/linux/mount.h \
+            || { echo "::error::struct vfsmount is missing the susfs KABI field"; exit 1; }
+          grep -q 'susfs_task_state' include/linux/sched.h \
+            || { echo "::error::task_struct is missing the susfs fields"; exit 1; }
+          # KernelSU's try_umount needs path_umount() (backported here so the
+          # KSU Makefile does not have to sed-patch the tree at build time).
+          grep -q '^int path_umount' fs/namespace.c \
+            || { echo "::error::path_umount() backport missing from fs/namespace.c"; exit 1; }
+          grep -q 'int path_umount' fs/internal.h \
+            || { echo "::error::path_umount() declaration missing from fs/internal.h"; exit 1; }
+          # KernelSU is vendored in-tree now; a leftover submodule would be
+          # silently checked out over it (or not at all).
+          test ! -e .gitmodules \
+            || { echo "::error::.gitmodules is back - KernelSU-Next must stay vendored"; exit 1; }
+          test -f drivers/kernelsu/Makefile \
+            || { echo "::error::drivers/kernelsu is not vendored in-tree"; exit 1; }
+
           # Haptics & sound pack
           require 'CONFIG_SND_PCM_TIMER=y'
           require 'CONFIG_SND_DYNAMIC_MINORS=y'
@@ -643,6 +739,8 @@ jobs:
     steps:
       - name: Checkout kernel source
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Download build artifact
         uses: actions/download-artifact@v4
