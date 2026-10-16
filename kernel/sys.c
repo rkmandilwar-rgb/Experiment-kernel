@@ -1182,12 +1182,24 @@ static int override_release(char __user *release, size_t len)
 	return ret;
 }
 
+#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
+extern void susfs_spoof_uname(struct new_utsname* tmp);
+#endif
+
 SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
 {
 	struct new_utsname tmp;
 
 	down_read(&uts_sem);
 	memcpy(&tmp, utsname(), sizeof(tmp));
+#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
+	/* - SUSFS set_uname: replaces release/version with the user-configured
+	 *   strings (a no-op until ksu_susfs actually sets them).  It runs first
+	 *   so the BPF-loader spoof below can still override it for the handful
+	 *   of root processes that need a plausible modern release string.
+	 */
+	susfs_spoof_uname(&tmp);
+#endif
 #ifndef CONFIG_FAKE_UNAME_NONE
 	/*
 	 * Kernel-side uname spoof.  Android's BPF program loader (and the
