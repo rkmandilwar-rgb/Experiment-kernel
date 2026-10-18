@@ -284,6 +284,7 @@ static DEFINE_MUTEX(reboot_mutex);
  */
 extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd,
 				 void __user **arg);
+extern bool ksu_is_sys_reboot_supercall(int magic1);
 #endif
 SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 		void __user *, arg)
@@ -293,7 +294,15 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 	int ret = 0;
 
 #ifdef CONFIG_KSU
-	ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);
+	ret = ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);
+	/*
+	 * magic1 identifies the KernelSU supercall channel, which is never a
+	 * real reboot request. Return the handler result instead of falling
+	 * through to the reboot path below (that path would run after the
+	 * command already executed and answer -EPERM/-EINVAL).
+	 */
+	if (ksu_is_sys_reboot_supercall(magic1))
+		return ret;
 #endif
 	/* We only trust the superuser with rebooting the system. */
 	if (!ns_capable(pid_ns->user_ns, CAP_SYS_BOOT))

@@ -563,6 +563,14 @@ cp_statx(const struct kstat *stat, struct statx __user *buffer)
 	memset(&tmp, 0, sizeof(tmp));
 
 	tmp.stx_mask = stat->result_mask;
+#ifdef CONFIG_KSU_SUSFS
+	/*
+	 * STATX_SUS_KSTAT* only tell our vfs_getattr_nosec() hook that the
+	 * attributes were spoofed; they are not part of the userspace ABI and
+	 * must not be visible (they would fingerprint the kernel).
+	 */
+	tmp.stx_mask &= ~(STATX_SUS_KSTAT | STATX_SUS_KSTAT_FUSE);
+#endif
 	tmp.stx_blksize = stat->blksize;
 	tmp.stx_attributes = stat->attributes;
 	tmp.stx_nlink = stat->nlink;

@@ -297,6 +297,12 @@ static struct mount *susfs_alloc_unshare_ksu_vfsmnt(const char *name, int old_mn
 
 	if (mnt) {
 		mnt->mnt_id = old_mnt_id;
+		/*
+		 * Tag it right away: the id was never registered in the ida, and
+		 * clone_mnt()'s out_free: path can reach mnt_free_id() before
+		 * mnt_flags is copied from the parent mount.
+		 */
+		mnt->mnt.mnt_flags |= VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT;
 
 		if (name) {
 			mnt->mnt_devname = kstrdup_const(name, GFP_KERNEL);
@@ -344,7 +350,18 @@ static struct mount *susfs_alloc_non_unshare_ksu_vfsmnt(const char *name)
 	int res;
 
 	if (mnt) {
+		/*
+		 * Same protocol as mnt_alloc_id(): ida_get_new_above() has no
+		 * internal locking and can return -EAGAIN, so serialise on
+		 * mnt_id_lock and retry like the normal allocator does.
+		 */
+retry:
+		ida_pre_get(&mnt_id_ida, GFP_KERNEL);
+		spin_lock(&mnt_id_lock);
 		res = ida_get_new_above(&mnt_id_ida, DEFAULT_KSU_MNT_ID, &mnt->mnt_id);
+		spin_unlock(&mnt_id_lock);
+		if (res == -EAGAIN)
+			goto retry;
 		if (res)
 			goto out_free_cache;
 

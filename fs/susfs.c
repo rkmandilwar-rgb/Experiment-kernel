@@ -758,11 +758,19 @@ out_copy_to_user:
 void susfs_try_umount(uid_t uid) {
 	struct st_susfs_try_umount_list *cursor = NULL;
 
+	/*
+	 * Serialise against susfs_add_try_umount(): the entries are published
+	 * with list_add_tail() under this mutex, so an unlocked walk here could
+	 * follow a half-updated ->next while userland registers a new path from
+	 * another CPU (the walk runs from a task_work callback on fork/exec).
+	 */
+	mutex_lock(&susfs_mutex_lock_try_umount);
 	/* undo the mounts in reverse registration order */
 	list_for_each_entry_reverse(cursor, &LH_TRY_UMOUNT_PATH, list) {
 		SUSFS_LOGI("umounting '%s' for uid: %u\n", cursor->info.target_pathname, uid);
 		try_umount(cursor->info.target_pathname, cursor->info.mnt_mode);
 	}
+	mutex_unlock(&susfs_mutex_lock_try_umount);
 }
 #endif // #ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
 
@@ -1139,6 +1147,7 @@ out_srcu_read_unlock:
 int susfs_open_redirect_spoof_vfs_readlink(struct inode *inode, char __user *buffer, int buflen) {
 	struct st_susfs_open_redirect_hlist *entry = NULL;
 	int srcu_idx = srcu_read_lock(&susfs_srcu_open_redirect);
+	int len;
 
 	hash_for_each_possible_rcu(OPEN_REDIRECT_HLIST, entry, node, inode->i_ino) {
 		if (entry->reversed_lookup_only &&
@@ -1146,18 +1155,20 @@ int susfs_open_redirect_spoof_vfs_readlink(struct inode *inode, char __user *buf
 		{
 			SUSFS_LOGI("spoof path '%s' to '%s'\n",
 					entry->info.target_pathname, entry->info.redirected_pathname);
-			if (strlen(entry->info.redirected_pathname) >= buflen) {
+			len = strlen(entry->info.redirected_pathname);
+			if (len >= buflen) {
 				SUSFS_LOGE("buflen not big enough\n");
 				srcu_read_unlock(&susfs_srcu_open_redirect, srcu_idx);
 				return -ENAMETOOLONG;
 			}
-			if (copy_to_user(buffer, entry->info.redirected_pathname, strlen(entry->info.redirected_pathname))) {
+			if (copy_to_user(buffer, entry->info.redirected_pathname, len)) {
 				SUSFS_LOGE("copy_to_user() failed\n");
 				srcu_read_unlock(&susfs_srcu_open_redirect, srcu_idx);
 				return -EFAULT;
 			}
 			srcu_read_unlock(&susfs_srcu_open_redirect, srcu_idx);
-			return 0;
+			/* vfs_readlink() returns the byte count, 0 would mean "empty" */
+			return len;
 		}
 	}
 	srcu_read_unlock(&susfs_srcu_open_redirect, srcu_idx);
@@ -1589,7 +1600,7 @@ static void susfs_run_extra_works(struct work_struct *work) {
 }
 
 /* susfs_init */
-void susfs_init(void) {\
+void susfs_init(void) {
 	SUSFS_LOGI("Initializing susfs_extra_works\n");
 	INIT_WORK(&susfs_extra_works, susfs_run_extra_works);
 	SUSFS_LOGI("susfs is initialized! version: " SUSFS_VERSION " \n");

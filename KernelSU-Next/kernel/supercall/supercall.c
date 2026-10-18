@@ -124,6 +124,11 @@ static void ksu_install_fd_tw_func(struct callback_head *cb)
     kfree(tw);
 }
 
+bool ksu_is_sys_reboot_supercall(int magic1)
+{
+	return magic1 == KSU_INSTALL_MAGIC1;
+}
+
 int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd,
 			  void __user **arg)
 {
