@@ -40,6 +40,9 @@
 
 #include <linux/kernel_stat.h>
 #include <linux/mm.h>
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+#include <linux/susfs_def.h>
+#endif
 #include <linux/sched/mm.h>
 #include <linux/sched/coredump.h>
 #include <linux/sched/numa_balancing.h>
@@ -4334,12 +4337,20 @@ int __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
 	int write = gup_flags & FOLL_WRITE;
 
 	down_read(&mm->mmap_sem);
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+	vma = find_vma(mm, addr);
+#endif
 	/* ignore errors, just check how much was successfully transferred */
 	while (len) {
 		int bytes, ret, offset;
 		void *maddr;
 		struct page *page = NULL;
 
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+		/* never let a debugger read memory of a SUS_MAP'd vma */
+		if (vma && vma->vm_file && SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))
+			break;
+#endif
 		ret = get_user_pages_remote(tsk, mm, addr, 1,
 				gup_flags, &page, &vma, NULL);
 		if (ret <= 0) {
