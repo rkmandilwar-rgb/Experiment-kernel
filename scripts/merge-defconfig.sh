@@ -17,7 +17,8 @@
 # "In-kernel performance tuning" note at the end of that file).  What is
 # merged here are the feature and tuning packs, in this order — later
 # fragments win, so compiler/bt/wifi/haptics always have the last word
-# (and kernelsu.config, merged last, pins the KernelSU Next hook mode).
+# (kernelsu.config pins the KernelSU Next hook mode, susfs.config the
+# SUSFS backport, and nomount.config the NoMount VFS framework).
 
 set -euo pipefail
 
@@ -44,6 +45,7 @@ frags=(
     kernel/configs/miatoll/wifi.config
     kernel/configs/miatoll/kernelsu.config
     kernel/configs/miatoll/susfs.config
+    kernel/configs/miatoll/nomount.config
 )
 
 echo "merge-defconfig.sh"

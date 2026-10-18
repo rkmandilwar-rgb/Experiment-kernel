@@ -570,6 +570,19 @@ jobs:
           grep -q 'susfs_handle_zygote_spawn' KernelSU-Next/kernel/hook/setuid_hook.c \
             || { echo "::error::SUSFS zygote policy missing from setuid_hook.c"; exit 1; }
 
+          # NoMount 21: VFS path redirection framework (no mounts, keyring API)
+          require 'CONFIG_NOMOUNT=y'
+          test -f fs/nomount/nomount.c \
+            || { echo "::error::NoMount core fs/nomount/nomount.c missing"; exit 1; }
+          grep -q 'obj-$(CONFIG_NOMOUNT) += nomount/' fs/Makefile \
+            || { echo "::error::NoMount not built from fs/Makefile"; exit 1; }
+          grep -q 'source "fs/nomount/Kconfig"' fs/Kconfig \
+            || { echo "::error::NoMount Kconfig not sourced from fs/Kconfig"; exit 1; }
+          grep -q 'register_key_type(&nm_key_type)' fs/nomount/nomount.c \
+            || { echo "::error::NoMount keyring endpoint missing"; exit 1; }
+          grep -q 'nomount_hijacked_lookup' fs/nomount/nomount.c \
+            || { echo "::error::NoMount VFS lookup hijack missing"; exit 1; }
+
           echo "::endgroup::"
           echo "::group::Config stats"
           echo "  =y  : $(grep -c '=y' out/.config)"
