@@ -1108,8 +1108,15 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 		 * re-open through the redirected path (uid<2000 callers only,
 		 * enforced inside susfs_open_redirect_spoof_do_sys_openat()).
 		 */
+		/*
+		 * WITHOUT_UID_CHECK: the hlist carries the caller policy
+		 * (UID_NON_APP_PROC / UID_ROOT_PROC_EXCEPT_SU_PROC / ...) and
+		 * susfs_open_redirect_spoof_do_sys_openat() enforces it. Gating
+		 * here on "umounted app" would silently disable the non-app and
+		 * root schemes.
+		 */
 		if (!IS_ERR(f) && f->f_path.dentry &&
-		    SUSFS_IS_INODE_OPEN_REDIRECT(f->f_path.dentry->d_inode)) {
+		    SUSFS_IS_INODE_OPEN_REDIRECT_WITHOUT_UID_CHECK(f->f_path.dentry->d_inode)) {
 			struct filename *fake_filename =
 				susfs_open_redirect_spoof_do_sys_openat(f->f_path.dentry->d_inode);
 			if (fake_filename && !IS_ERR(fake_filename)) {
