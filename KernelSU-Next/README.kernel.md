@@ -111,36 +111,52 @@ git add -f KernelSU-Next/kernel/manager KernelSU-Next/kernel/.clang-format \
 # top-level Makefile and the table above; rebuild via CI.
 ```
 
-## Backporting SUSFS (v2.3.0) later — the plan
+## SUSFS v2.3.0 backport (done)
 
-This is the reason the integration is shaped the way it is.  susfs4ksu's
-non-GKI instructions (upstream: `simonpunk/susfs4ksu`, `kernel-4.14` branch;
-GitHub mirrors such as `sidex15/susfs4ksu-begonia`) split into three parts,
-all of which slot straight into this layout:
+SUSFS v2.3.0 is now part of the tree.  The work was authored against the
+upstream v2.3.0 sources (`fs/susfs.c`, `include/linux/susfs.h`,
+`include/linux/susfs_def.h`) with the 4.14 adaptations checked against the
+non-GKI 4.14 kernels that already ship it — crDroid's
+`android_kernel_xiaomi_sm8150` (17.0) and sidex15's
+`android_kernel_lge_sm8150` (`OpenELA-4.14.y-susfs`) — rather than by
+pasting a single patch.
 
-1. **Kernel-side SUSFS core** — `kernel_patches/fs/*` → `fs/`,
-   `kernel_patches/include/linux/*` → `include/linux/`, then apply
-   `50_add_susfs_in_kernel-4.14*.patch` at the kernel root (`patch -p1`).
-   Its hunks touch `fs/stat.c`, `fs/namespace.c`, `fs/dcache.c`,
-   `fs/namei.c`, `kernel/sys.c`, `kernel/kallsyms.c` … — our KSU call
-   sites use the same "minimized hook" contexts those patches expect.
-2. **KSU-side SUSFS** — the KSU-driver patch (e.g.
-   `10_enable_susfs_for_ksu.patch` or the KernelSU-Next-specific variant)
-   is applied **inside this directory** (`cd KernelSU-Next && patch -p1 …`),
-   exactly as the susfs4ksu README instructs (`$KERNEL_ROOT/KernelSU/` for
-   stock KSU ≙ `$KERNEL_ROOT/KernelSU-Next/` here).  Its hunks target
-   `kernel/...` paths, which map to `KernelSU-Next/kernel/...`.
-3. **SUS_SU** — must stay **disabled** on non-GKI manual-hook kernels
-   (`CONFIG_KSU_SUSFS_SUS_SU=n`); enable the `CONFIG_KSU_SUSFS_*` options
-   the patch adds via a new `kernel/configs/miatoll/susfs.config` fragment
-   (merge order: after `kernelsu.config`).
+**Kernel-side** (`fs/susfs.c`, `fs/Makefile`, headers, config):
+`CONFIG_KSU_SUSFS` + `SUS_PATH`, `SUS_MOUNT`, `SUS_KSTAT`, `TRY_UMOUNT`,
+`SPOOF_UNAME`, `ENABLE_LOG`, `HIDE_KSU_SUSFS_SYMBOLS`,
+`SPOOF_CMDLINE_OR_BOOTCONFIG`, `OPEN_REDIRECT`, `SUS_MAP`; `SUS_SU` stays
+off (deprecated in 2.x, and not wanted on a manual-hook kernel).  Hook
+sites: `fs/namei.c`, `fs/namespace.c`, `fs/stat.c`, `fs/statfs.c`,
+`fs/readdir.c`, `fs/open.c`, `fs/exec.c`, `fs/super.c`,
+`fs/proc/{base,fd,task_mmu}.c`, `fs/proc_namespace.c`,
+`fs/notify/fdinfo.c`, `mm/memory.c`, `kernel/{sys,kallsyms}.c`,
+`security/selinux/avc.c`, `drivers/input/input.c`.
 
-When picking the SUSFS version, prefer the same KSUN generation the susfs
-patches were cut against (the "generic" KSUN SUSFS patch expects
-`ksu_handle_post_execveat_sucompat` in `feature/sucompat.c` — present in
-KSUN ≥ 3.4 legacy snapshots).  If a hunks fails, the usual cause is the
-`kernel/Kbuild` build-time backports above having been committed.
+**KSU-side** (`KernelSU-Next/kernel/`): supercall magic2 dispatch
+(`supercall/supercall.c` + `supercall/dispatch.c`), SELinux SID cache and
+helpers (`selinux/selinux.c`), zygote spawn policy + per-process TIF flags
+(`hook/setuid_hook.c`), non-static `try_umount` + susfs umount pass
+(`feature/kernel_umount.c`), and `susfs_init()` from
+`core/init.c`.
 
+**4.14 deltas from upstream v2.3.0:**
+- `i_mapping->flags` → `inode->i_state` (4.14 has no `AS_*` flags on the
+  address space); SUSFS flag bits 33/34/35/36/39 are defined in
+  `susfs_def.h`.
+- `fsnotify_add_inode_mark(...)` → `fsnotify_add_mark(m, inode, NULL, 0)`
+  and a 10-argument `.handle_event` (no `.handle_inode_event`).
+- no `kvrealloc()` (plain `kvmalloc` paths), no `show_smaps_rollup`,
+  no `proc/bootconfig.c` (cmdline gate lives in `fs/proc/cmdline.c`).
+- `current_uid()` needs `linux/cred.h`; use `__kuid_val()`.
+- the 4.14 `ida` supports `ida_alloc_range()` (used for the fake anon
+  device range below `DEFAULT_KSU_MNT_MINOR_DEV`).
+
+**Not ported on purpose:** the SELinux-hide hunks in
+`security/selinux/{hooks,selinuxfs}.c` — they depend on the kernel fork's
+`fake_state` / `ksu_selinux_hide_running` symbols which plain KSUN does not
+provide.
+
+## CI
 ## CI
 
 `.github/workflows/build.yml` builds the kernel with this driver compiled
