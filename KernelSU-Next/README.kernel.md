@@ -156,7 +156,46 @@ helpers (`selinux/selinux.c`), zygote spawn policy + per-process TIF flags
 `fake_state` / `ksu_selinux_hide_running` symbols which plain KSUN does not
 provide.
 
-## CI
+## NoMount (VFS path redirection)
+
+`fs/nomount/` vendors the kernel side of
+[maxsteeel/nomount](https://github.com/maxsteeel/nomount) (`kernel/src`,
+`NOMOUNT_BASE_VERSION "21"`, master).  NoMount intercepts path resolution
+and directory iteration in RAM instead of creating mounts: nothing appears
+in `/proc/mounts`, the backing partitions (erofs/ext4) are never touched,
+and rules can be per-UID.  Userspace talks to it through the kernel keyring
+— it registers a `"nomount"` key type and `add_key()` carries a pointer to
+a packed payload page — so there is no `/dev` node, no ioctl, and
+`CONFIG_KEYS=y` is required (already on in the miatoll defconfig).
+
+Integration points:
+
+| file | change |
+| --- | --- |
+| `fs/nomount/` | vendored `Kconfig`, `Makefile`, `nomount.c`, `nomount.h` |
+| `fs/Kconfig` | `source "fs/nomount/Kconfig"` before the closing `endmenu` |
+| `fs/Makefile` | `obj-$(CONFIG_NOMOUNT) += nomount/` |
+| `kernel/configs/miatoll/nomount.config` | `CONFIG_NOMOUNT=y` |
+| `scripts/merge-defconfig.sh` | fragment merged after `susfs.config` |
+
+It is built **in** (`CONFIG_NOMOUNT=y`), not as an LKM: the prebuilt
+`nomount.ko` images only exist for GKI kernels, and a 4.14 non-GKI tree is
+exactly the case upstream tells you to integrate at build time.
+
+**4.14 adaptations** (kept as small, commented hunks in the vendored
+files, so an upstream refresh is a 4-file copy plus these again):
+- `DCACHE_OPS` does not exist before 5.1; `nomount.h` defines it as the
+  equivalent mask of the individual `DCACHE_OP_*` bits 4.14 does have.
+- `nomount.c` includes `mm.h`, `slab.h`, `sched.h`, `string.h`,
+  `uaccess.h` explicitly — 4.14's `fs.h` does not pull them in.
+- upstream's `DCACHE_DONTCACHE` fallback already covers 4.14.
+- `MODULE_IMPORT_NS()` is guarded to >= 5.0 upstream, so 4.14 skips it.
+
+**Updating:** copy the four files from upstream `kernel/src/` over
+`fs/nomount/` and re-apply the two compat hunks above (`DCACHE_OPS` +
+includes).  Keep `CONFIG_NOMOUNT=y` and the CI checks in
+`.github/workflows/build.yml` in sync.
+
 ## CI
 
 `.github/workflows/build.yml` builds the kernel with this driver compiled
