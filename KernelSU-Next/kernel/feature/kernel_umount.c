@@ -14,6 +14,9 @@
 #endif
 
 #include "feature/kernel_umount.h"
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/susfs.h>
+#endif
 #include "klog.h" // IWYU pragma: keep
 #include "policy/allowlist.h"
 #include "selinux/selinux.h"

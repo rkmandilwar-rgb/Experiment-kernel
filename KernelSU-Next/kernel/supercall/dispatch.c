@@ -18,6 +18,9 @@
 #include "manager/manager_identity.h"
 #include "selinux/selinux.h"
 #include "infra/file_wrapper.h"
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/susfs.h>
+#endif
 #include "hook/hook_manager.h"
 #include "policy/app_profile.h"
 #include "sulog/event.h"
