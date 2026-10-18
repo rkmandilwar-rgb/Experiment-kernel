@@ -549,6 +549,26 @@ jobs:
             || { echo "::error::SUSFS SUS_PATH hook missing from fs/namei.c"; exit 1; }
           grep -q 'CMD_SUSFS_ADD_SUS_PATH' KernelSU-Next/kernel/supercall/supercall.c \
             || { echo "::error::SUSFS supercall dispatch missing"; exit 1; }
+          grep -q 'SUSFS_IS_INODE_SUS_MAP' fs/proc/task_mmu.c \
+            || { echo "::error::SUSFS SUS_MAP hook missing from fs/proc/task_mmu.c"; exit 1; }
+          grep -q 'susfs_open_redirect_spoof_do_proc_readlink' fs/proc/base.c \
+            || { echo "::error::SUSFS OPEN_REDIRECT hook missing from fs/proc/base.c"; exit 1; }
+          grep -q 'susfs_is_hide_sus_mnts_for_non_su_procs_enabled' fs/proc_namespace.c \
+            || { echo "::error::SUSFS SUS_MOUNT hook missing from fs/proc_namespace.c"; exit 1; }
+          grep -q 'susfs_sus_kstat_spoof_proc_fd_seq_show' fs/proc/fd.c \
+            || { echo "::error::SUSFS SUS_KSTAT hook missing from fs/proc/fd.c"; exit 1; }
+          grep -q 'susfs_sus_kstat_spoof_inotify_fdinfo' fs/notify/fdinfo.c \
+            || { echo "::error::SUSFS SUS_KSTAT hook missing from fs/notify/fdinfo.c"; exit 1; }
+          grep -q 'DEFAULT_KSU_MNT_MINOR_DEV' fs/super.c \
+            || { echo "::error::SUSFS anon-dev hook missing from fs/super.c"; exit 1; }
+          grep -q 'SUSFS_IS_INODE_SUS_MAP' mm/memory.c \
+            || { echo "::error::SUSFS SUS_MAP hook missing from mm/memory.c"; exit 1; }
+          grep -q 'susfs_init()' KernelSU-Next/kernel/core/init.c \
+            || { echo "::error::susfs_init() call missing from KSU init"; exit 1; }
+          grep -q 'susfs_try_umount' KernelSU-Next/kernel/feature/kernel_umount.c \
+            || { echo "::error::SUSFS try_umount pass missing from kernel_umount.c"; exit 1; }
+          grep -q 'susfs_handle_zygote_spawn' KernelSU-Next/kernel/hook/setuid_hook.c \
+            || { echo "::error::SUSFS zygote policy missing from setuid_hook.c"; exit 1; }
 
           echo "::endgroup::"
           echo "::group::Config stats"
