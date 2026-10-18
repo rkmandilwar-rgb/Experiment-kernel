@@ -37,6 +37,9 @@
 #include <linux/lockdep.h>
 #include <linux/user_namespace.h>
 #include "internal.h"
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+#include <linux/susfs_def.h>
+#endif
 
 
 static LIST_HEAD(super_blocks);
