@@ -1521,7 +1521,7 @@ static int add_mark_on_inode(struct inode *inode, u32 mask,
 	fsnotify_init_mark(m, g);
 	m->mask = mask;
 
-	if (fsnotify_add_inode_mark(m, inode, 0)) {
+	if (fsnotify_add_mark(m, inode, NULL, 0)) {
 		fsnotify_put_mark(m);
 		return -EINVAL;
 	}
