@@ -225,4 +225,7 @@ source "drivers/sensors/Kconfig"
 
 source "drivers/esoc/Kconfig"
 
+# KernelSU Next (non-GKI): drivers/kernelsu -> ../KernelSU-Next/kernel
+source "drivers/kernelsu/Kconfig"
+
 endmenu

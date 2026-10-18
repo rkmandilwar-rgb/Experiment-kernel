@@ -5,6 +5,15 @@ SUBLEVEL = 357
 EXTRAVERSION = -openela
 NAME = Petit Gorille
 
+# KernelSU Next (non-GKI): the vendored driver (KernelSU-Next/) is in this
+# same git repo, so its Kbuild cannot derive a version from "git rev-list"
+# of a separate repo and would fall back to "1".  Pin the reported driver
+# version here instead (make vars are exported into Kbuild, see
+# KernelSU-Next/kernel/Kbuild: KSU_VERSION_OVERRIDE / KSU_VERSION_TAG_OVERRIDE).
+# Bump both together with KernelSU-Next/ + the Manager APK when updating.
+export KSU_VERSION_OVERRIDE ?= 33355
+export KSU_VERSION_TAG_OVERRIDE ?= v3.4.2-legacy-g0b17f242
+
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"
 # More info can be located in ./README

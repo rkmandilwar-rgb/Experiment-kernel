@@ -1880,11 +1880,35 @@ out_ret:
 	return retval;
 }
 
+#ifdef CONFIG_KSU
+/* KernelSU Next (non-GKI): manual hook entry points (defined by the KSUN
+ * driver, see KernelSU-Next/kernel/).  Signatures must match the vendored
+ * driver; the extern bools are the scope-minimization switches (they turn
+ * themselves off once the early-boot work is done).
+ */
+extern bool ksu_execveat_hook __read_mostly;
+extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr,
+			       void *argv, void *envp, int *flags);
+extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
+					void *argv, void *envp, int *flags);
+#endif
+
 static int do_execveat_common(int fd, struct filename *filename,
 			      struct user_arg_ptr argv,
 			      struct user_arg_ptr envp,
 			      int flags)
 {
+#ifdef CONFIG_KSU
+	/* KernelSU Next (non-GKI): manual execveat hook.  Early in boot the
+	 * full hook (ksud tracking) runs; afterwards only sucompat stays on.
+	 * Mirrors the scope-minimized manual hook layout that susfs4ksu's
+	 * non-GKI patches are written against (do NOT move without a reason).
+	 */
+	if (unlikely(ksu_execveat_hook))
+		ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
+	else
+		ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);
+#endif
 	return __do_execve_file(fd, filename, argv, envp, flags, NULL);
 }
 

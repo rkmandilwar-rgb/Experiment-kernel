@@ -19,6 +19,13 @@ if ! [ -a $gcc32bin ]; then git clone --depth=1 https://github.com/LineageOS/and
 fi
 rm -rf AnyKernel
 make O=out ARCH=arm64 vendor/xiaomi/miatoll_defconfig
+# Merge the feature/tuning fragments exactly like CI does (includes
+# kernel/configs/miatoll/kernelsu.config -> KernelSU Next, manual hooks).
+MERGED="arch/arm64/configs/vendor/xiaomi/stormbreaker_defconfig"
+cp arch/arm64/configs/vendor/xiaomi/miatoll_defconfig "$MERGED"
+scripts/merge-defconfig.sh "$MERGED"
+make O=out ARCH=arm64 vendor/xiaomi/stormbreaker_defconfig
+rm -f "$MERGED"
 PATH="${PWD}/clang/bin:${PATH}:${PWD}/gcc32/bin:${PATH}:${PWD}/gcc64/bin:${PATH}" \
 make -j$(nproc --all) O=out \
                       ARCH=arm64 \

@@ -16,7 +16,8 @@
 # straight into arch/arm64/configs/vendor/xiaomi/miatoll_defconfig (see the
 # "In-kernel performance tuning" note at the end of that file).  What is
 # merged here are the feature and tuning packs, in this order — later
-# fragments win, so compiler/bt/wifi/haptics always have the last word.
+# fragments win, so compiler/bt/wifi/haptics always have the last word
+# (and kernelsu.config, merged last, pins the KernelSU Next hook mode).
 
 set -euo pipefail
 
@@ -41,6 +42,7 @@ frags=(
     kernel/configs/miatoll/haptics-sound.config
     kernel/configs/miatoll/bluetooth.config
     kernel/configs/miatoll/wifi.config
+    kernel/configs/miatoll/kernelsu.config
 )
 
 echo "merge-defconfig.sh"

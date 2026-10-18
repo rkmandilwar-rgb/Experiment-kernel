@@ -14,7 +14,13 @@
 # scripts/merge-defconfig.sh): eBPF, NTFS(+ntfs3), EROFS, BBRv1 + BBRplus,
 # Droidspaces, NetHunter, compiler/codegen, thermal management, performance
 # scheduler, touch (conservative), audio/speaker, haptics & sound, Bluetooth,
-# Wi-Fi.
+# Wi-Fi, KernelSU Next.
+#
+# KernelSU Next (non-GKI): driver vendored at KernelSU-Next/ (legacy line),
+# built in via drivers/kernelsu with CONFIG_KSU=y + CONFIG_KSU_MANUAL_HOOK=y.
+# Manual VFS hook call sites live in fs/exec.c, fs/open.c, fs/read_write.c,
+# fs/stat.c, kernel/reboot.c and drivers/input/input.c - kept in the shape
+# susfs4ksu's non-GKI patches expect.  See KernelSU-Next/README.kernel.md.
 #
 # This pipeline builds and uploads artifacts only.  The release job below is
 # permanently disabled (`if: false`) on purpose: nothing is ever published to
@@ -506,6 +512,28 @@ jobs:
           # cgroup NOPREFIX compatibility links must use the legacy prefix
           grep -q 'cgroup_compat_link_name' kernel/cgroup/cgroup.c \
             || { echo "::error::cgroup NOPREFIX compat link helper missing"; exit 1; }
+
+          # KernelSU Next (non-GKI, manual hooks).  CONFIG_KSU must be
+          # built-in and pinned to MANUAL_HOOK: kprobe hooks are for 5.10+
+          # and syscall-table patching needs 4.17+, this is a 4.14 tree.
+          # The hook call sites are the scope-minimized VFS hooks that a
+          # future SUSFS backport patches around - keep them present.
+          require 'CONFIG_KSU=y'
+          require 'CONFIG_KSU_MANUAL_HOOK=y'
+          test -f KernelSU-Next/kernel/Kconfig \
+            || { echo "::error::vendored KernelSU-Next driver missing"; exit 1; }
+          grep -q 'ksu_handle_sys_reboot' kernel/reboot.c \
+            || { echo "::error::KSU manual hook missing from kernel/reboot.c"; exit 1; }
+          grep -q 'ksu_handle_execveat' fs/exec.c \
+            || { echo "::error::KSU manual hook missing from fs/exec.c"; exit 1; }
+          grep -q 'ksu_handle_faccessat' fs/open.c \
+            || { echo "::error::KSU manual hook missing from fs/open.c"; exit 1; }
+          grep -q 'ksu_handle_vfs_read' fs/read_write.c \
+            || { echo "::error::KSU manual hook missing from fs/read_write.c"; exit 1; }
+          grep -q 'ksu_handle_stat' fs/stat.c \
+            || { echo "::error::KSU manual hook missing from fs/stat.c"; exit 1; }
+          grep -q 'ksu_handle_input_handle_event' drivers/input/input.c \
+            || { echo "::error::KSU manual hook missing from drivers/input/input.c"; exit 1; }
 
           echo "::endgroup::"
           echo "::group::Config stats"
