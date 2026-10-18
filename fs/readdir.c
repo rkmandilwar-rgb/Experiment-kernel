@@ -348,6 +348,9 @@ SYSCALL_DEFINE3(getdents, unsigned int, fd,
 
 struct getdents_callback64 {
 	struct dir_context ctx;
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	struct super_block *sb;
+#endif
 	struct linux_dirent64 __user * current_dir;
 	struct linux_dirent64 __user * previous;
 	int count;
