@@ -574,7 +574,7 @@ jobs:
           require 'CONFIG_NOMOUNT=y'
           test -f fs/nomount/nomount.c \
             || { echo "::error::NoMount core fs/nomount/nomount.c missing"; exit 1; }
-          grep -q 'obj-$(CONFIG_NOMOUNT) += nomount/' fs/Makefile \
+          grep -qE 'obj-\$\(CONFIG_NOMOUNT\)[[:space:]]*\+=[[:space:]]*nomount/' fs/Makefile \
             || { echo "::error::NoMount not built from fs/Makefile"; exit 1; }
           grep -q 'source "fs/nomount/Kconfig"' fs/Kconfig \
             || { echo "::error::NoMount Kconfig not sourced from fs/Kconfig"; exit 1; }
