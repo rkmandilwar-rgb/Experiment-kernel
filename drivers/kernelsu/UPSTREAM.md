@@ -3,11 +3,12 @@
 This directory vendors the kernel component from:
 
 - Repository: https://github.com/backslashxx/KernelSU
-- Release/tag: `v3.3.1` (kernel driver `KSU_VERSION=32676`)
-- Matching Manager release asset: `KernelSU_v3.3.1_32680-release.apk`
+- Release/tag: `v3.3.1-13` (kernel driver `KSU_VERSION=32693`, **UAPI v6**)
+- Matching Manager release asset: `KernelSU_v3.3.1-13_32693-release.apk`
 - The upstream `kernel/` subtree is imported, with only the local SUSFS v2.3.0
   glue documented below reapplied.
-- The driver exposes KernelSU UAPI v5, which the matching Manager requires.
+- The driver exposes KernelSU UAPI v6, which the matching Manager requires
+  (kernel and Manager must update together).
   Upstream notes that existing app profiles may reset during this update.
 
 It is integrated in-tree for the Linux 4.14 non-GKI Miatoll kernel
@@ -51,6 +52,18 @@ are retained across the `v3.3.1` refresh:
   `ksu_module_mounted = true` on `EVENT_MODULE_MOUNTED`.
 
 ## Sync history
+
+- 2026-10-18: refreshed the vendored driver to backslashxx/KernelSU
+  `v3.3.1-13` (`KSU_VERSION=32693`, **UAPI v6** — kernel and Manager must
+  update together; profiles may reset) and reapplied the local SUSFS glue +
+  fortify/`assume()` build fixes. Driver delta vs the previous snapshot:
+  `LOOKUP_SYMBOLS` supercall (root-only), module preinit stubs, shell-su
+  allowance check (tiann #3882), midori supermanager recognition, deferred
+  setprocattr overload, `kvmalloc` `__GFP_ZERO` fix, `kvcalloc` shim, and the
+  module late-load escape disabled (`#if 0`; the init.rc second-stage path
+  remains the one that caches SIDs). Matching Manager is
+  `KernelSU_v3.3.1-13_32693-release.apk` (version code 32693). Note: upstream
+  deleted the v3.3.1-11 release (like v3.3.0-79 before it).
 
 - 2026-10-13: refreshed the vendored driver to backslashxx/KernelSU
   `v3.3.1` and reapplied the local SUSFS glue + `kernel_compat.h` build
