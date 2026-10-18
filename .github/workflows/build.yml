@@ -657,6 +657,58 @@ jobs:
           compression-level: 9
           retention-days: 90
 
+  # On failure, commit the build logs into ci-logs/ on this branch so the
+  # error output is readable straight from the repo (no artifact digging).
+  # The commit message carries [skip ci] so the push does not re-trigger
+  # this workflow.  Best effort: if the branch moved on meanwhile, the push
+  # is skipped and the logs remain available as a workflow artifact.
+  publish-error-logs:
+    name: Push error logs to the repo
+    needs: build
+    if: failure()
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Clean stale ci-logs from earlier runs
+        run: rm -rf ci-logs
+
+      - name: Download failure diagnostics
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: miatoll-build-failure-${{ github.run_number }}
+          path: ci-logs
+
+      - name: Commit and push ci-logs/
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs
+          {
+            echo "branch=${{ github.ref_name }}"
+            echo "commit=${{ github.sha }}"
+            echo "run=${{ github.run_number }}"
+            echo "run_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > ci-logs/RUN.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # publish only the logs, never code
+          git add -A ci-logs
+          if git diff --cached --quiet; then
+            echo "no log files to publish"
+            exit 0
+          fi
+          git commit -m "ci: build failure logs (run ${{ github.run_number }}) [skip ci]"
+          git push origin "HEAD:${{ github.ref_name }}" \
+            || echo "::warning::could not push error logs (branch moved on); see the workflow artifact"
+
   release:
     name: Publish release
     needs: build

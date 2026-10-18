@@ -1,2 +1,6 @@
-userspace
-manager
+# Anchored with a leading slash on purpose: upstream's unanchored
+# "userspace"/"manager" match at any depth and silently ate the driver's own
+# kernel/manager/ sources when vendoring this snapshot (see README.kernel.md).
+# Keep them anchored.
+/userspace
+/manager

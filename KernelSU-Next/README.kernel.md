@@ -13,9 +13,19 @@ This directory is a **vendored snapshot of [KernelSU-Next](https://github.com/Ke
 | Reported driver version | `33355` / `v3.4.2-legacy-g0b17f242` (pinned in the top-level `Makefile`) |
 | Manager | `KernelSU_Next_v3.4.2_33355-release.apk` ([releases](https://github.com/KernelSU-Next/KernelSU-Next/releases)) — or the `-spoofed` variant |
 
-Contents mirror upstream `kernel/`, `uapi/`, `LICENSE` verbatim (plus their
-`.gitignore`).  The `kernel/include/uapi -> ../../uapi` symlink is upstream's
-and must survive updates.
+Contents mirror upstream `kernel/`, `uapi/`, `LICENSE` verbatim.  The
+`kernel/include/uapi -> ../../uapi` symlink is upstream's and must survive
+updates.  Two caveats (both bit us once — see git history):
+
+* Upstream's `.gitignore` says plain `manager` / `userspace`, which git
+  matches at **any** depth — it silently swallowed the driver's own
+  `kernel/manager/` sources (`apk_sign`, `throne_tracker`,
+  `manager_identity/observer`, `pkg_observer`) on first vendor.  The
+  patterns here are anchored (`/manager`, `/userspace`); keep them that way.
+* The kernel repo's top-level `.gitignore` has `.*`, which hides upstream's
+  tracked dotfiles (`kernel/.clang-format`, `kernel/.clangd`,
+  `kernel/.vscode/`).  They are force-added once; `git add -f` them again
+  after an update if upstream adds new ones.
 
 ## How it is wired in (what to redo after an update)
 
@@ -92,6 +102,11 @@ tar -xzf /tmp/ksun.tar.gz -C /tmp
 rsync -a --delete --exclude='.gitignore' /tmp/KernelSU-Next-legacy/kernel/ KernelSU-Next/kernel/
 rsync -a --delete /tmp/KernelSU-Next-legacy/uapi/ KernelSU-Next/uapi/
 cp /tmp/KernelSU-Next-legacy/LICENSE KernelSU-Next/
+# manager/ and the upstream dotfiles are easy to lose to ignore rules -
+# force-add them so the build never loses headers again:
+git add -A KernelSU-Next
+git add -f KernelSU-Next/kernel/manager KernelSU-Next/kernel/.clang-format \
+           KernelSU-Next/kernel/.clangd KernelSU-Next/kernel/.vscode
 # then: update KSU_VERSION_OVERRIDE / KSU_VERSION_TAG_OVERRIDE in the
 # top-level Makefile and the table above; rebuild via CI.
 ```
@@ -134,3 +149,9 @@ the six manual hook call sites) and uploads the flashable zip as a workflow
 artifact.  **Nothing is ever published to GitHub Releases** — the release
 job is permanently gated with `if: false` and a guard step fails the build
 if that gate is removed.
+
+On a failed build the workflow also commits the diagnostics
+(`build.log`, `build-errors.txt`, `fragment-check.log`, `out/.config`,
+`RUN.txt`) to `ci-logs/` on the same branch — with `[skip ci]`, so it never
+re-triggers a build — which makes the error output readable straight from
+the repo.
