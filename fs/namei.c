@@ -41,6 +41,19 @@
 #include <linux/uaccess.h>
 
 #include "internal.h"
+#if defined(CONFIG_KSU_SUSFS_SUS_PATH) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)
+#include <linux/susfs_def.h>
+#endif
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+extern bool susfs_is_inode_sus_path(struct inode *inode);
+extern const struct qstr susfs_fake_qstr_name;
+#endif
+#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
+extern struct filename *susfs_open_redirect_spoof_do_sys_openat(struct inode *inode);
+extern int susfs_open_redirect_spoof_vfs_readlink(struct inode *inode,
+		char __user *buffer, int buflen);
+#endif
+
 #include "mount.h"
 
 #define CREATE_TRACE_POINTS
@@ -523,6 +536,9 @@ EXPORT_SYMBOL(path_put);
 
 #define EMBEDDED_LEVELS 2
 struct nameidata {
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	unsigned int	state;
+#endif
 	struct path	path;
 	struct qstr	last;
 	struct path	root;
@@ -549,6 +565,9 @@ static void set_nameidata(struct nameidata *p, int dfd, struct filename *name)
 {
 	struct nameidata *old = current->nameidata;
 	p->stack = p->internal;
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	p->state = 0;
+#endif
 	p->dfd = dfd;
 	p->name = name;
 	p->total_link_count = old ? old->total_link_count : 0;
@@ -1630,6 +1649,12 @@ static struct dentry *lookup_dcache(const struct qstr *name,
 			dput(dentry);
 			return ERR_PTR(error);
 		}
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+		if (dentry->d_inode && susfs_is_inode_sus_path(dentry->d_inode)) {
+			dput(dentry);
+			return NULL;
+		}
+#endif
 	}
 	return dentry;
 }
@@ -1671,7 +1696,27 @@ static struct dentry *__lookup_hash(const struct qstr *name,
 	if (unlikely(!dentry))
 		return ERR_PTR(-ENOMEM);
 
-	return lookup_real(base->d_inode, dentry, flags);
+	dentry = lookup_real(base->d_inode, dentry, flags);
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	/*
+	 * A hit on a sus path is re-done under the reserved fake name so
+	 * every caller observes a plain "does not exist" negative dentry
+	 * (and no create can ever materialize the fake name).
+	 */
+	if (dentry && !IS_ERR(dentry) && dentry->d_inode &&
+	    susfs_is_inode_sus_path(dentry->d_inode)) {
+		bool is_fuse = dentry->d_inode->i_sb->s_magic == FUSE_SUPER_MAGIC;
+
+		dput(dentry);
+		if (is_fuse && (flags & (LOOKUP_CREATE | LOOKUP_EXCL)))
+			return ERR_PTR(-EACCES);
+		dentry = d_alloc(base, &susfs_fake_qstr_name);
+		if (unlikely(!dentry))
+			return ERR_PTR(-ENOMEM);
+		return lookup_real(base->d_inode, dentry, flags);
+	}
+#endif
+	return dentry;
 }
 
 static int lookup_fast(struct nameidata *nd,
@@ -1902,6 +1947,10 @@ static inline int step_into(struct nameidata *nd, struct path *path,
 
 static int walk_component(struct nameidata *nd, int flags)
 {
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	if (nd->state & ND_STATE_LOOKUP_LAST)
+		nd->flags |= ND_FLAGS_LOOKUP_LAST;
+#endif
 	struct path path;
 	struct inode *inode;
 	unsigned seq;
@@ -2193,6 +2242,13 @@ static int link_path_walk(const char *name, struct nameidata *nd)
 		u64 hash_len;
 		int type;
 
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+		{
+			struct dentry *dentry = nd->path.dentry;
+			if (dentry->d_inode && susfs_is_inode_sus_path(dentry->d_inode))
+				return -ENOENT;
+		}
+#endif
 		err = may_lookup(nd);
 		if (err)
 			return err;
@@ -2385,6 +2441,9 @@ static const char *trailing_symlink(struct nameidata *nd)
 
 static inline int lookup_last(struct nameidata *nd)
 {
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	nd->state |= ND_STATE_LOOKUP_LAST;
+#endif
 	if (nd->last_type == LAST_NORM && nd->last.name[nd->last.len])
 		nd->flags |= LOOKUP_FOLLOW | LOOKUP_DIRECTORY;
 
@@ -3400,6 +3459,9 @@ static int do_last(struct nameidata *nd,
 		   struct file *file, const struct open_flags *op,
 		   int *opened)
 {
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	nd->state |= ND_STATE_OPEN_LAST;
+#endif
 	struct dentry *dir = nd->path.dentry;
 	kuid_t dir_uid = nd->inode->i_uid;
 	umode_t dir_mode = nd->inode->i_mode;
@@ -4935,6 +4997,14 @@ static int generic_readlink(struct dentry *dentry, char __user *buffer,
 int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen)
 {
 	struct inode *inode = d_inode(dentry);
+
+#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
+	if (SUSFS_IS_INODE_OPEN_REDIRECT(inode)) {
+		int res = susfs_open_redirect_spoof_vfs_readlink(inode, buffer, buflen);
+		if (!res)
+			return res;
+	}
+#endif
 
 	if (unlikely(!(inode->i_opflags & IOP_DEFAULT_READLINK))) {
 		if (unlikely(inode->i_op->readlink))

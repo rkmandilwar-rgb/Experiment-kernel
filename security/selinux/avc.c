@@ -31,6 +31,12 @@
 #include <linux/ipv6.h>
 #include <net/ipv6.h>
 #include "avc.h"
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/jump_label.h>
+extern struct static_key_false susfs_is_avc_log_spoofing_enabled;
+extern u32 susfs_ksu_sid;
+extern u32 susfs_priv_app_sid;
+#endif
 #include "avc_ss.h"
 #include "classmap.h"
 
@@ -757,6 +763,15 @@ static void avc_audit_post_callback(struct audit_buffer *ab, void *a)
 {
 	struct common_audit_data *ad = a;
 	audit_log_format(ab, " ");
+#ifdef CONFIG_KSU_SUSFS
+	/*
+	 * When avc log spoofing is on, never let a ksu-domain target hit
+	 * the kernel log; report it as priv_app instead.
+	 */
+	if (static_key_enabled(&susfs_is_avc_log_spoofing_enabled) &&
+	    ad->selinux_audit_data->tsid == susfs_ksu_sid)
+		ad->selinux_audit_data->tsid = susfs_priv_app_sid;
+#endif
 	avc_dump_query(ab, ad->selinux_audit_data->state,
 		       ad->selinux_audit_data->ssid,
 		       ad->selinux_audit_data->tsid,

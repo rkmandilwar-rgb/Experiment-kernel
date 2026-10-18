@@ -535,6 +535,21 @@ jobs:
           grep -q 'ksu_handle_input_handle_event' drivers/input/input.c \
             || { echo "::error::KSU manual hook missing from drivers/input/input.c"; exit 1; }
 
+          # SUSFS v2.3.0 backport: core + key hook sites must stay wired
+          require 'CONFIG_KSU_SUSFS=y'
+          test -f fs/susfs.c \
+            || { echo "::error::SUSFS core fs/susfs.c missing"; exit 1; }
+          grep -q 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' fs/Makefile \
+            || { echo "::error::SUSFS not built from fs/Makefile"; exit 1; }
+          grep -q 'susfs_is_inode_sus_kstat' fs/stat.c \
+            || { echo "::error::SUSFS SUS_KSTAT hook missing from fs/stat.c"; exit 1; }
+          grep -q 'susfs_alloc_non_unshare_ksu_vfsmnt' fs/namespace.c \
+            || { echo "::error::SUSFS SUS_MOUNT hook missing from fs/namespace.c"; exit 1; }
+          grep -q 'susfs_is_inode_sus_path' fs/namei.c \
+            || { echo "::error::SUSFS SUS_PATH hook missing from fs/namei.c"; exit 1; }
+          grep -q 'CMD_SUSFS_ADD_SUS_PATH' KernelSU-Next/kernel/supercall/supercall.c \
+            || { echo "::error::SUSFS supercall dispatch missing"; exit 1; }
+
           echo "::endgroup::"
           echo "::group::Config stats"
           echo "  =y  : $(grep -c '=y' out/.config)"

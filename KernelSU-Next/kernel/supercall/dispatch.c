@@ -135,6 +135,10 @@ static int do_report_event(void __user *arg)
 			} else {
 				pr_info("boot_complete triggered\n");
 				on_boot_completed();
+#ifdef CONFIG_KSU_SUSFS
+				// /data/media is ready now: start the sdcard decrypt watch
+				susfs_start_sdcard_monitor_fn();
+#endif
 			}
 		}
 		break;
@@ -482,6 +486,12 @@ static int do_manage_mark(void __user *arg)
 
 	switch (cmd.operation) {
 	case KSU_MARK_GET: {
+#ifdef CONFIG_KSU_SUSFS
+		// with SUSFS the "mark" state is the TIF_PROC_UMOUNTED task flag:
+		// 0 = umounted (no longer marked), 1 = still marked
+		cmd.result = susfs_is_current_proc_umounted() ? 0 : 1;
+		break;
+#else
 		// Get task mark status
 		ret = ksu_get_task_mark(cmd.pid);
 		if (ret < 0) {
@@ -490,8 +500,13 @@ static int do_manage_mark(void __user *arg)
 		}
 		cmd.result = (u32)ret;
 		break;
+#endif
 	}
 	case KSU_MARK_MARK: {
+#ifdef CONFIG_KSU_SUSFS
+		// mark tracking is implicit under SUSFS (set by the spawn policy)
+		break;
+#else
 		if (cmd.pid == 0) {
 			ksu_mark_all_process();
 		} else {
@@ -503,8 +518,12 @@ static int do_manage_mark(void __user *arg)
 			}
 		}
 		break;
+#endif
 	}
 	case KSU_MARK_UNMARK: {
+#ifdef CONFIG_KSU_SUSFS
+		break;
+#else
 		if (cmd.pid == 0) {
 			ksu_unmark_all_process();
 		} else {
@@ -516,10 +535,15 @@ static int do_manage_mark(void __user *arg)
 			}
 		}
 		break;
+#endif
 	}
 	case KSU_MARK_REFRESH: {
+#ifdef CONFIG_KSU_SUSFS
+		pr_info("susfs: KSU_MARK_REFRESH: nothing to do\n");
+#else
 		ksu_mark_running_process();
 		pr_info("manage_mark: refreshed running processes\n");
+#endif
 		break;
 	}
 	default: {

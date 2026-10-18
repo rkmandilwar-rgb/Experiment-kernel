@@ -47,6 +47,10 @@
 
 #include <linux/compat.h>
 #include <linux/syscalls.h>
+#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
+#include <linux/susfs_def.h>
+extern void susfs_spoof_uname(struct new_utsname *tmp);
+#endif
 #include <linux/kprobes.h>
 #include <linux/user_namespace.h>
 #include <linux/binfmts.h>
@@ -1224,6 +1228,9 @@ SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
 	}
 #endif
 	up_read(&uts_sem);
+#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
+	susfs_spoof_uname(&tmp);
+#endif
 	if (copy_to_user(name, &tmp, sizeof(tmp)))
 		return -EFAULT;
 

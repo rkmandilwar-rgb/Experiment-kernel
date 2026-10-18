@@ -72,4 +72,104 @@ config KSU_SYSCALL_TABLE_HOOK
 
 endchoice
 
+menu "KernelSU - SUSFS"
+config KSU_SUSFS
+	bool "KernelSU addon - SUSFS"
+	depends on KSU
+	depends on THREAD_INFO_IN_TASK
+	default n
+	help
+	  Patch and enable SUSFS (v2.3.0) with KernelSU. SUSFS hides su
+	  related artefacts (paths, mounts, kstat, maps) and spoofs uname,
+	  cmdline and avc logs for user apps.
+
+config KSU_SUSFS_SUS_PATH
+	bool "Enable to hide suspicious path (NOT recommended)"
+	depends on KSU_SUSFS
+	default y
+	help
+	  Hide user-defined paths and their children from various system
+	  calls. Effective only on zygote spawned user app processes.
+	  May cost performance and is vulnerable to side channel attacks;
+	  disable if it does not work for you.
+
+config KSU_SUSFS_SUS_MOUNT
+	bool "Enable to hide suspicious mounts"
+	depends on KSU_SUSFS
+	default y
+	help
+	  Hide user-defined mount paths from /proc/self/[mounts|mountinfo|
+	  mountstats]. Effective on all processes. mnt_id and mnt_group_id
+	  of the sus mounts are assigned from the high fake id range so
+	  real ids stay contiguous.
+
+config KSU_SUSFS_SUS_KSTAT
+	bool "Enable to spoof suspicious kstat"
+	depends on KSU_SUSFS
+	default y
+	help
+	  Spoof the kstat of user-defined files/directories. Effective
+	  only on zygote spawned user app processes.
+
+config KSU_SUSFS_TRY_UMOUNT
+	bool "Enable to use ksu's try_umount"
+	depends on KSU_SUSFS
+	default y
+	help
+	  Also umount user-defined mount paths before ksu's default
+	  umount paths, on zygote spawned umounted user app processes.
+
+config KSU_SUSFS_SPOOF_UNAME
+	bool "Enable to spoof uname"
+	depends on KSU_SUSFS
+	default y
+	help
+	  Spoof the strings returned by the uname syscall with
+	  user-defined strings. Effective on all processes.
+
+config KSU_SUSFS_ENABLE_LOG
+	bool "Enable logging susfs log to kernel"
+	depends on KSU_SUSFS
+	default y
+	help
+	  Log susfs activity to the kernel log. Uncheck to silence all
+	  susfs logs.
+
+config KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+	bool "Enable to automatically hide ksu and susfs symbols from /proc/kallsyms"
+	depends on KSU_SUSFS
+	default y
+	help
+	  Hide ksu_/__ksu_/susfs_/ksud/is_ksu_ symbols from /proc/kallsyms.
+	  Effective on all processes.
+
+config KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+	bool "Enable to spoof /proc/cmdline (non-gki)"
+	depends on KSU_SUSFS
+	default y
+	help
+	  Spoof the output of /proc/cmdline with a user-defined string.
+	  Effective on all processes.
+
+config KSU_SUSFS_OPEN_REDIRECT
+	bool "Enable to redirect a path to be opened with another path (experimental)"
+	depends on KSU_SUSFS
+	default y
+	help
+	  Redirect a target path to be opened as another user-defined
+	  path. Effective only on processes with uid < 2000. Processes
+	  with open access to both paths can detect the redirection.
+
+config KSU_SUSFS_SUS_MAP
+	bool "Enable to hide some mmapped real file from different proc maps interfaces"
+	depends on KSU_SUSFS
+	default y
+	help
+	  Hide mmapped real files from /proc/<pid>/[maps|smaps|map_files|
+	  mem|pagemap]. Anon memory is not supported, and inline/plt hooks
+	  from the injected library itself are not hidden. Effective only
+	  on zygote spawned umounted user app processes.
+
+endmenu
+
 endmenu

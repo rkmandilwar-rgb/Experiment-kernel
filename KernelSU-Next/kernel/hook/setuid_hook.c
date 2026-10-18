@@ -25,9 +25,78 @@
 #include "hook/hook_manager.h"
 #include "feature/kernel_umount.h"
 #include "compat/kernel_compat.h"
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/susfs.h>
+#include <linux/susfs_def.h>
+#include <linux/workqueue.h>
+#include "selinux/selinux.h"
+
+extern u32 susfs_zygote_sid;
+extern bool susfs_is_sid_equal(const struct cred *cred, u32 sid2);
+extern struct work_struct susfs_extra_works;
+
+static inline void ksu_handle_extra_susfs_work(void)
+{
+    if (work_pending(&susfs_extra_works))
+        return;
+    schedule_work(&susfs_extra_works);
+}
+
+/*
+ * SUSFS-aware spawn policy (v2.3.0): zygote is the only uid-0 spawner we
+ * care about. Apps that must not see su/mounts get marked no_su+umounted
+ * and their mounts are torn down before returning to userspace.
+ */
+static int susfs_handle_zygote_spawn(uid_t ruid)
+{
+    if (is_isolated_process(ruid)) {
+        susfs_set_current_proc_no_su();
+        susfs_set_current_proc_umounted();
+        goto do_umount;
+    }
+
+    // manager app: give it the supercall fd and let seccomp through
+    if (unlikely(is_uid_manager(ruid))) {
+        disable_seccomp();
+        pr_info("install fd for manager: %d\n", ruid);
+        ksu_install_fd();
+        return 0;
+    }
+
+    if (likely(is_appuid(ruid) && ksu_uid_should_umount(ruid))) {
+        susfs_set_current_proc_no_su();
+        susfs_set_current_proc_umounted();
+        goto do_umount;
+    }
+
+    if (ksu_is_allow_uid_for_current(ruid)) {
+        disable_seccomp();
+        return 0;
+    }
+
+    // spawned app keeps its mounts but must never see su
+    susfs_set_current_proc_no_su();
+    return 0;
+
+do_umount:
+    ksu_handle_umount(current_uid().val, ruid);
+    ksu_handle_extra_susfs_work();
+    return 0;
+}
+#endif // CONFIG_KSU_SUSFS
 
 int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid)
 {
+#ifdef CONFIG_KSU_SUSFS
+    // only the uid-0 spawner (zygote) is interesting here
+    if (current_uid().val != 0)
+        return 0;
+
+    if (susfs_is_sid_equal(current_cred(), susfs_zygote_sid))
+        return susfs_handle_zygote_spawn(new_uid);
+
+    return 0;
+#else
     // we rely on the fact that zygote always call setresuid(3) with same uids
 
     pr_info("handle_setresuid from %d to %d\n", old_uid, new_uid);
@@ -73,6 +142,7 @@ int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid)
     ksu_handle_umount(old_uid, new_uid);
 
     return 0;
+#endif // CONFIG_KSU_SUSFS
 }
 
 void __init ksu_setuid_hook_init(void)

@@ -12,6 +12,9 @@
  *      compression (see scripts/kallsyms.c for a more complete description)
  */
 #include <linux/kallsyms.h>
+#ifdef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+#include <linux/susfs_def.h>
+#endif
 #include <linux/init.h>
 #include <linux/seq_file.h>
 #include <linux/fs.h>
@@ -599,6 +602,15 @@ static int s_show(struct seq_file *m, void *p)
 	/* Some debugging symbols have no name.  Ignore them. */
 	if (!iter->name[0])
 		return 0;
+
+#ifdef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+	if (susfs_starts_with(iter->name, "ksu_") ||
+	    susfs_starts_with(iter->name, "__ksu_") ||
+	    susfs_starts_with(iter->name, "susfs_") ||
+	    susfs_starts_with(iter->name, "ksud") ||
+	    susfs_starts_with(iter->name, "is_ksu_"))
+		return 0;
+#endif
 
 	if (iter->module_name[0]) {
 		char type;

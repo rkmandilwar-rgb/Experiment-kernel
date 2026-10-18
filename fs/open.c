@@ -33,6 +33,10 @@
 #include <linux/compat.h>
 
 #include "internal.h"
+#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
+#include <linux/susfs_def.h>
+extern struct filename *susfs_open_redirect_spoof_do_sys_openat(struct inode *inode);
+#endif
 
 int do_truncate2(struct vfsmount *mnt, struct dentry *dentry, loff_t length,
 		unsigned int time_attrs, struct file *filp)
@@ -1098,6 +1102,23 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 	fd = get_unused_fd_flags(flags);
 	if (fd >= 0) {
 		struct file *f = do_filp_open(dfd, tmp, &op);
+#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
+		/*
+		 * Target flagged for open-redirect: close the first open and
+		 * re-open through the redirected path (uid<2000 callers only,
+		 * enforced inside susfs_open_redirect_spoof_do_sys_openat()).
+		 */
+		if (!IS_ERR(f) && f->f_path.dentry &&
+		    SUSFS_IS_INODE_OPEN_REDIRECT(f->f_path.dentry->d_inode)) {
+			struct filename *fake_filename =
+				susfs_open_redirect_spoof_do_sys_openat(f->f_path.dentry->d_inode);
+			if (fake_filename && !IS_ERR(fake_filename)) {
+				filp_close(f, NULL);
+				f = do_filp_open(dfd, fake_filename, &op);
+				putname(fake_filename);
+			}
+		}
+#endif
 		if (IS_ERR(f)) {
 			put_unused_fd(fd);
 			fd = PTR_ERR(f);

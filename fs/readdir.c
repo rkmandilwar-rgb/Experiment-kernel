@@ -22,6 +22,11 @@
 #include <linux/compat.h>
 
 #include <linux/uaccess.h>
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+#include <linux/susfs_def.h>
+extern bool susfs_is_inode_sus_path(struct inode *inode);
+extern int susfs_get_data_path(struct path *path);
+#endif
 
 int iterate_dir(struct file *file, struct dir_context *ctx)
 {
@@ -172,7 +177,24 @@ SYSCALL_DEFINE3(old_readdir, unsigned int, fd,
 	if (!f.file)
 		return -EBADF;
 
-	error = iterate_dir(f.file, &buf.ctx);
+	#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	{
+		int susfs_path_err = -EINVAL;
+		struct path susfs_path;
+		if (f.file->f_inode->i_sb->s_magic == FUSE_SUPER_MAGIC) {
+			susfs_path_err = susfs_get_data_path(&susfs_path);
+			if (!susfs_path_err) {
+				buf.sb = susfs_path.dentry->d_inode->i_sb;
+				goto susfs_sb_ready;
+			}
+		}
+		buf.sb = f.file->f_inode->i_sb;
+susfs_sb_ready:
+		if (!susfs_path_err)
+			path_put(&susfs_path);
+	}
+#endif
+error = iterate_dir(f.file, &buf.ctx);
 	if (buf.result)
 		error = buf.result;
 
@@ -195,6 +217,9 @@ struct linux_dirent {
 
 struct getdents_callback {
 	struct dir_context ctx;
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	struct super_block *sb;
+#endif
 	struct linux_dirent __user * current_dir;
 	struct linux_dirent __user * previous;
 	int count;
@@ -214,7 +239,18 @@ static int filldir(struct dir_context *ctx, const char *name, int namlen,
 	buf->error = verify_dirent_name(name, namlen);
 	if (unlikely(buf->error))
 		return buf->error;
-	buf->error = -EINVAL;	/* only used if we fail.. */
+	buf->error = -EINVAL;	#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	{
+		struct inode *s_inode = ilookup(buf->sb, ino);
+		if (s_inode) {
+			bool hide = susfs_is_inode_sus_path(s_inode);
+			iput(s_inode);
+			if (hide)
+				return 0;
+		}
+	}
+#endif
+/* only used if we fail.. */
 	if (reclen > buf->count)
 		return -EINVAL;
 	d_ino = ino;
@@ -269,7 +305,24 @@ SYSCALL_DEFINE3(getdents, unsigned int, fd,
 	if (!f.file)
 		return -EBADF;
 
-	error = iterate_dir(f.file, &buf.ctx);
+	#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	{
+		int susfs_path_err = -EINVAL;
+		struct path susfs_path;
+		if (f.file->f_inode->i_sb->s_magic == FUSE_SUPER_MAGIC) {
+			susfs_path_err = susfs_get_data_path(&susfs_path);
+			if (!susfs_path_err) {
+				buf.sb = susfs_path.dentry->d_inode->i_sb;
+				goto susfs_sb_ready;
+			}
+		}
+		buf.sb = f.file->f_inode->i_sb;
+susfs_sb_ready:
+		if (!susfs_path_err)
+			path_put(&susfs_path);
+	}
+#endif
+error = iterate_dir(f.file, &buf.ctx);
 	if (error >= 0)
 		error = buf.error;
 	lastdirent = buf.previous;
@@ -285,6 +338,9 @@ SYSCALL_DEFINE3(getdents, unsigned int, fd,
 
 struct getdents_callback64 {
 	struct dir_context ctx;
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	struct super_block *sb;
+#endif
 	struct linux_dirent64 __user * current_dir;
 	struct linux_dirent64 __user * previous;
 	int count;
@@ -303,7 +359,18 @@ static int filldir64(struct dir_context *ctx, const char *name, int namlen,
 	buf->error = verify_dirent_name(name, namlen);
 	if (unlikely(buf->error))
 		return buf->error;
-	buf->error = -EINVAL;	/* only used if we fail.. */
+	buf->error = -EINVAL;	#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	{
+		struct inode *s_inode = ilookup(buf->sb, ino);
+		if (s_inode) {
+			bool hide = susfs_is_inode_sus_path(s_inode);
+			iput(s_inode);
+			if (hide)
+				return 0;
+		}
+	}
+#endif
+/* only used if we fail.. */
 	if (reclen > buf->count)
 		return -EINVAL;
 	dirent = buf->previous;
@@ -355,7 +422,24 @@ SYSCALL_DEFINE3(getdents64, unsigned int, fd,
 	if (!f.file)
 		return -EBADF;
 
-	error = iterate_dir(f.file, &buf.ctx);
+	#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	{
+		int susfs_path_err = -EINVAL;
+		struct path susfs_path;
+		if (f.file->f_inode->i_sb->s_magic == FUSE_SUPER_MAGIC) {
+			susfs_path_err = susfs_get_data_path(&susfs_path);
+			if (!susfs_path_err) {
+				buf.sb = susfs_path.dentry->d_inode->i_sb;
+				goto susfs_sb_ready;
+			}
+		}
+		buf.sb = f.file->f_inode->i_sb;
+susfs_sb_ready:
+		if (!susfs_path_err)
+			path_put(&susfs_path);
+	}
+#endif
+error = iterate_dir(f.file, &buf.ctx);
 	if (error >= 0)
 		error = buf.error;
 	lastdirent = buf.previous;
@@ -434,7 +518,24 @@ COMPAT_SYSCALL_DEFINE3(old_readdir, unsigned int, fd,
 	if (!f.file)
 		return -EBADF;
 
-	error = iterate_dir(f.file, &buf.ctx);
+	#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	{
+		int susfs_path_err = -EINVAL;
+		struct path susfs_path;
+		if (f.file->f_inode->i_sb->s_magic == FUSE_SUPER_MAGIC) {
+			susfs_path_err = susfs_get_data_path(&susfs_path);
+			if (!susfs_path_err) {
+				buf.sb = susfs_path.dentry->d_inode->i_sb;
+				goto susfs_sb_ready;
+			}
+		}
+		buf.sb = f.file->f_inode->i_sb;
+susfs_sb_ready:
+		if (!susfs_path_err)
+			path_put(&susfs_path);
+	}
+#endif
+error = iterate_dir(f.file, &buf.ctx);
 	if (buf.result)
 		error = buf.result;
 
@@ -451,6 +552,9 @@ struct compat_linux_dirent {
 
 struct compat_getdents_callback {
 	struct dir_context ctx;
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	struct super_block *sb;
+#endif
 	struct compat_linux_dirent __user *current_dir;
 	struct compat_linux_dirent __user *previous;
 	int count;
@@ -467,7 +571,18 @@ static int compat_filldir(struct dir_context *ctx, const char *name, int namlen,
 	int reclen = ALIGN(offsetof(struct compat_linux_dirent, d_name) +
 		namlen + 2, sizeof(compat_long_t));
 
-	buf->error = -EINVAL;	/* only used if we fail.. */
+	buf->error = -EINVAL;	#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	{
+		struct inode *s_inode = ilookup(buf->sb, ino);
+		if (s_inode) {
+			bool hide = susfs_is_inode_sus_path(s_inode);
+			iput(s_inode);
+			if (hide)
+				return 0;
+		}
+	}
+#endif
+/* only used if we fail.. */
 	if (reclen > buf->count)
 		return -EINVAL;
 	d_ino = ino;
@@ -522,7 +637,24 @@ COMPAT_SYSCALL_DEFINE3(getdents, unsigned int, fd,
 	if (!f.file)
 		return -EBADF;
 
-	error = iterate_dir(f.file, &buf.ctx);
+	#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	{
+		int susfs_path_err = -EINVAL;
+		struct path susfs_path;
+		if (f.file->f_inode->i_sb->s_magic == FUSE_SUPER_MAGIC) {
+			susfs_path_err = susfs_get_data_path(&susfs_path);
+			if (!susfs_path_err) {
+				buf.sb = susfs_path.dentry->d_inode->i_sb;
+				goto susfs_sb_ready;
+			}
+		}
+		buf.sb = f.file->f_inode->i_sb;
+susfs_sb_ready:
+		if (!susfs_path_err)
+			path_put(&susfs_path);
+	}
+#endif
+error = iterate_dir(f.file, &buf.ctx);
 	if (error >= 0)
 		error = buf.error;
 	lastdirent = buf.previous;

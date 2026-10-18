@@ -79,7 +79,7 @@ static void ksu_sys_umount(const char *mnt, int flags)
 
 #endif
 
-static void try_umount(const char *mnt, int flags)
+void try_umount(const char *mnt, int flags)
 {
 	struct path path;
 	int err = kern_path(mnt, 0, &path);
@@ -111,6 +111,11 @@ static void umount_tw_func(struct callback_head *cb)
         try_umount(entry->umountable, entry->flags);
     }
     up_read(&mount_list_lock);
+
+#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
+    // user-defined susfs umount paths, undone after the default list
+    susfs_try_umount(current_uid().val);
+#endif
 
 	revert_creds(saved);
 

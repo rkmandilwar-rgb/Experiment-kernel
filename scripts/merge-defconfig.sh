@@ -43,6 +43,7 @@ frags=(
     kernel/configs/miatoll/bluetooth.config
     kernel/configs/miatoll/wifi.config
     kernel/configs/miatoll/kernelsu.config
+    kernel/configs/miatoll/susfs.config
 )
 
 echo "merge-defconfig.sh"

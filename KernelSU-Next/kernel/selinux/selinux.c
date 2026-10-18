@@ -25,6 +25,67 @@ static u32 cached_adbd_sid __read_mostly = 0;
 static u32 cached_init_sid __read_mostly = 0;
 u32 ksu_file_sid __read_mostly = 0;
 
+#ifdef CONFIG_KSU_SUSFS
+/*
+ * SUSFS SID cache: populated together with the KSU SIDs above so that
+ * susfs hooks can do cheap u32 domain comparisons (avc spoofing, mount
+ * id tagging, zygote spawn policy).
+ */
+u32 susfs_ksu_sid __read_mostly = 0;
+u32 susfs_init_sid __read_mostly = 0;
+u32 susfs_zygote_sid __read_mostly = 0;
+u32 susfs_priv_app_sid __read_mostly = 0;
+
+#define SUSFS_PRIV_APP_DOMAIN "u:r:priv_app:s0"
+
+bool susfs_is_sid_equal(const struct cred *cred, u32 sid2)
+{
+    const struct task_security_struct *tsec;
+
+    if (!cred)
+        return false;
+    tsec = selinux_cred(cred);
+    if (!tsec)
+        return false;
+    return tsec->sid == sid2;
+}
+
+u32 susfs_get_sid_from_name(const char *secctx_name)
+{
+    u32 out_sid = 0;
+    int err;
+
+    if (!secctx_name)
+        return 0;
+    err = security_secctx_to_secid(secctx_name, strlen(secctx_name), &out_sid);
+    if (err) {
+        pr_warn("susfs: failed resolving sid for '%s': %d\n", secctx_name, err);
+        return 0;
+    }
+    return out_sid;
+}
+
+u32 susfs_get_current_sid(void)
+{
+    return current_sid();
+}
+
+bool susfs_is_current_ksu_domain(void)
+{
+    return unlikely(current_sid() == susfs_ksu_sid);
+}
+
+bool susfs_is_current_zygote_domain(void)
+{
+    return unlikely(current_sid() == susfs_zygote_sid);
+}
+
+bool susfs_is_current_init_domain(void)
+{
+    return unlikely(current_sid() == susfs_init_sid);
+}
+#endif // CONFIG_KSU_SUSFS
+
 static int transive_to_domain(const char *domain, struct cred *cred, bool clear_exec_sid)
 {
     struct task_security_struct *tsec;
@@ -208,6 +269,15 @@ void cache_sid(void)
     } else {
         pr_info("Cached ksu_file SID: %u\n", ksu_file_sid);
     }
+
+#ifdef CONFIG_KSU_SUSFS
+    susfs_ksu_sid = cached_su_sid;
+    susfs_zygote_sid = cached_zygote_sid;
+    susfs_init_sid = cached_init_sid;
+    susfs_priv_app_sid = susfs_get_sid_from_name(SUSFS_PRIV_APP_DOMAIN);
+    pr_info("susfs: SIDs ksu=%u zygote=%u init=%u priv_app=%u\n",
+            susfs_ksu_sid, susfs_zygote_sid, susfs_init_sid, susfs_priv_app_sid);
+#endif
 }
 
 /*
