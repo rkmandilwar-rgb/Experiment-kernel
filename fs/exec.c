@@ -61,6 +61,9 @@
 #include <linux/pipe_fs_i.h>
 #include <linux/oom.h>
 #include <linux/compat.h>
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/susfs_def.h>
+#endif
 #include <linux/vmalloc.h>
 
 #include <linux/uaccess.h>
@@ -1903,11 +1906,19 @@ static int do_execveat_common(int fd, struct filename *filename,
 	 * full hook (ksud tracking) runs; afterwards only sucompat stays on.
 	 * Mirrors the scope-minimized manual hook layout that susfs4ksu's
 	 * non-GKI patches are written against (do NOT move without a reason).
+	 *
+	 * susfs: a process marked no_su (isolated zygote child) must never be
+	 * handed a su session by the sucompat hook on exec.
 	 */
-	if (unlikely(ksu_execveat_hook))
-		ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
-	else
-		ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);
+#ifdef CONFIG_KSU_SUSFS
+	if (!susfs_is_current_proc_no_su())
+#endif
+	{
+		if (unlikely(ksu_execveat_hook))
+			ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
+		else
+			ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);
+	}
 #endif
 	return __do_execve_file(fd, filename, argv, envp, flags, NULL);
 }

@@ -57,6 +57,9 @@ int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
      !defined(CONFIG_STACKPROTECTOR_PER_TASK))
 #include <linux/stackprotector.h>
 #include <linux/random.h>
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/susfs.h>
+#endif
 unsigned long __stack_chk_guard __ro_after_init
     __attribute__((visibility("hidden")));
 
@@ -194,6 +197,11 @@ int __init kernelsu_init(void)
 
 		ksu_file_wrapper_init();
 	}
+
+#ifdef CONFIG_KSU_SUSFS
+	/* initialise susfs hashes / workqueues / sdcard watcher */
+	susfs_init();
+#endif
 
 #ifdef MODULE
 #ifndef CONFIG_KSU_DEBUG
