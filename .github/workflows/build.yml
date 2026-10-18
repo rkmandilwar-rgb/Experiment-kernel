@@ -668,6 +668,14 @@ jobs:
           check_file out/arch/arm64/boot/dtbo.img
           check_file out/arch/arm64/boot/dts/qcom/cust-atoll-ab.dtb
 
+          # Prove the optional VFS frameworks are linked IN, not just built
+          check_file out/System.map
+          for sym in susfs_init nm_key_preparse nomount_hijacked_lookup; do
+            grep -q " $sym$" out/System.map \
+              || { echo "::error::$sym missing from System.map (feature not linked)"; exit 1; }
+            echo "ok: linked $sym"
+          done
+
           echo "::group::SHA256"
           sha256sum out/arch/arm64/boot/Image.gz
           sha256sum out/arch/arm64/boot/dtbo.img
