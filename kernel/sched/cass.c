@@ -36,7 +36,29 @@ static __always_inline
 unsigned long cass_cpu_util(int cpu, int this_cpu, bool sync)
 {
 	struct cfs_rq *cfs_rq = &cpu_rq(cpu)->cfs;
-	unsigned long util = READ_ONCE(cfs_rq->avg.util_avg);
+	unsigned long util;
+
+	/*
+	 * Use the same utilization source as task_util(): on WALT kernels
+	 * @p's utilization comes from ravg.demand_scaled, so the CPU side
+	 * must come from walt_stats.cumulative_runnable_avg_scaled too.
+	 * Reading the PELT cfs_rq->avg.util_avg here (as this code used to)
+	 * compares two different load trackers and can make a busy CPU look
+	 * almost idle.  Keep the PELT path for kernels/WALT configs that
+	 * still use it, and keep CASS's unclipped semantics either way.
+	 */
+#ifdef CONFIG_SCHED_WALT
+	if (likely(!walt_disabled && sysctl_sched_use_walt_cpu_util)) {
+		util = READ_ONCE(cpu_rq(cpu)->walt_stats.cumulative_runnable_avg_scaled);
+
+		/* Deduct @current's util if this is a sync wake */
+		if (sync && cpu == this_cpu)
+			sub_positive(&util, task_util(current));
+
+		return util;
+	}
+#endif
+	util = READ_ONCE(cfs_rq->avg.util_avg);
 
 	/* Deduct @current's util from this CPU if this is a sync wake */
 	if (sync && cpu == this_cpu)
