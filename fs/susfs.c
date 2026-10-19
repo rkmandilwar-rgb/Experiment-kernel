@@ -40,6 +40,18 @@ DEFINE_STATIC_KEY_TRUE(susfs_is_log_enabled);
 #define SUSFS_LOGE(fmt, ...) 
 #endif
 
+/*
+ * The command structs carry fixed-size character arrays.  A caller can fill
+ * one completely and leave it unterminated; every consumer below treats it
+ * as a C string (kern_path(), strcmp(), %s), so force a terminator the same
+ * way the kernel does for syscall paths (at most one byte of an already
+ * PATH_MAX-long name is lost).
+ */
+static inline void susfs_nul_terminate(char *field, size_t len)
+{
+	field[len - 1] = '\0';
+}
+
 /* sus_path */
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
 DEFINE_STATIC_SRCU(susfs_srcu_sus_path_loop);
@@ -57,6 +69,8 @@ void susfs_add_sus_path(void __user **user_info) {
 		info.err = -EFAULT;
 		goto out_copy_to_user;
 	}
+
+	susfs_nul_terminate(info.target_pathname, sizeof(info.target_pathname));
 
 	info.err = kern_path(info.target_pathname, LOOKUP_FOLLOW, &path);
 	if (info.err) {
@@ -107,6 +121,7 @@ void susfs_add_sus_path_loop(void __user **user_info) {
 		info.err = -EFAULT;
 		goto out_copy_to_user;
 	}
+	susfs_nul_terminate(info.target_pathname, sizeof(info.target_pathname));
 
 	if (*info.target_pathname == '\0') {
 		SUSFS_LOGE("target_pathname cannot be empty\n");
@@ -212,7 +227,6 @@ bool susfs_is_inode_sus_path(struct inode *inode)
 			is_i_uid_not_allowed(fi->inode.i_uid.val)))
 #endif
 		{
-			SUSFS_LOGI("hiding path with ino '%lu'\n", inode->i_ino);
 			return true;
 		}
 		return false;
@@ -228,7 +242,6 @@ bool susfs_is_inode_sus_path(struct inode *inode)
 		is_i_uid_not_allowed(inode->i_uid.val)))
 #endif
 	{
-		SUSFS_LOGI("hiding path with ino '%lu'\n", inode->i_ino);
 		return true;
 	}
 	return false;
@@ -359,6 +372,8 @@ void susfs_add_sus_kstat(void __user **user_info) {
 		goto out_copy_to_user;
 	}
 
+	susfs_nul_terminate(info.target_pathname, sizeof(info.target_pathname));
+
 	if (*info.target_pathname == '\0') {
 		info.err = -EINVAL;
 		goto out_copy_to_user;
@@ -473,6 +488,7 @@ void susfs_update_sus_kstat(void __user **user_info) {
 		info.err = -EFAULT;
 		goto out_copy_to_user;
 	}
+	susfs_nul_terminate(info.target_pathname, sizeof(info.target_pathname));
 
 	new_entry = kzalloc(sizeof(struct st_susfs_sus_kstat_hlist), GFP_KERNEL);
 	if (!new_entry) {
@@ -721,6 +737,7 @@ void susfs_add_try_umount(void __user **user_info) {
 		info.err = -EFAULT;
 		goto out_copy_to_user;
 	}
+	susfs_nul_terminate(info.target_pathname, sizeof(info.target_pathname));
 
 	/* translate the user-facing mount mode into umount(2) flags */
 	if (info.mnt_mode == TRY_UMOUNT_DEFAULT) {
@@ -787,6 +804,8 @@ void susfs_set_uname(void __user **user_info) {
 		info.err = -EFAULT;
 		goto out_copy_to_user;
 	}
+	susfs_nul_terminate(info.release, sizeof(info.release));
+	susfs_nul_terminate(info.version, sizeof(info.version));
 
 	if (*info.release == '\0' || *info.version == '\0') {
 		info.err = -EFAULT;
@@ -959,13 +978,14 @@ void susfs_add_open_redirect(void __user **user_info) {
 	struct inode *target_inode, *redirected_inode;
 	bool is_first_dup_found = false;
 	bool is_second_dup_found = false;
-	unsigned long old_redirected_ino = 0;
 	int bkt;
 
 	if (copy_from_user(&info, (struct st_susfs_open_redirect __user*)*user_info, sizeof(info))) {
 		info.err = -EFAULT;
 		goto out_copy_to_user;
 	}
+	susfs_nul_terminate(info.target_pathname, sizeof(info.target_pathname));
+	susfs_nul_terminate(info.redirected_pathname, sizeof(info.redirected_pathname));
 
         if (*info.target_pathname == '\0') {
                 info.err = -EINVAL;
@@ -1077,18 +1097,26 @@ void susfs_add_open_redirect(void __user **user_info) {
 			goto out_path_put_target_path;
 		}
 		is_first_dup_found = true;
-		old_redirected_ino = tmp_entry_target->redirected_ino;
 		hash_del_rcu(&tmp_entry_target->node);
 		break;
 	}
 
 	if (is_first_dup_found) {
+		/*
+		 * The reversed record is the mirror of the one just removed, so
+		 * look it up by pathname rather than by inode.  Either side may
+		 * have been replaced between the two commands (rm+create keeps
+		 * the name but changes i_ino), and an inode-keyed lookup would
+		 * leave the stale record -- and its readlink spoof -- in place.
+		 */
 		hash_for_each_safe(OPEN_REDIRECT_HLIST, bkt, tmp_hlist_node, tmp_entry_redirected, node) {
 			if (!tmp_entry_redirected->reversed_lookup_only)
 				continue;
-			if (tmp_entry_redirected->target_ino != old_redirected_ino)
+			if (strcmp(tmp_entry_redirected->info.target_pathname,
+				   tmp_entry_target->info.redirected_pathname))
 				continue;
-			if (tmp_entry_redirected->redirected_ino != tmp_entry_target->target_ino)
+			if (strcmp(tmp_entry_redirected->info.redirected_pathname,
+				   tmp_entry_target->info.target_pathname))
 				continue;
 			is_second_dup_found = true;
 			hash_del_rcu(&tmp_entry_redirected->node);
@@ -1279,6 +1307,7 @@ void susfs_add_sus_map(void __user **user_info) {
 		info.err = -EFAULT;
 		goto out_copy_to_user;
 	}
+	susfs_nul_terminate(info.target_pathname, sizeof(info.target_pathname));
 
 	info.err = kern_path(info.target_pathname, LOOKUP_FOLLOW, &path);
 	if (info.err) {

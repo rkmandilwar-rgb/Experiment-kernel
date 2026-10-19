@@ -535,7 +535,8 @@ static int nm_mmap(struct file *file, struct vm_area_struct *vma)
      */
     inode->i_flags &= ~S_PRIVATE;
     ret = generic_file_mmap(file, vma);
-    inode->i_flags |= S_PRIVATE;
+    if (!ret)
+        inode->i_flags |= S_PRIVATE;
     return ret;
 }
 
@@ -547,7 +548,8 @@ static int nm_mmap_prepare(struct vm_area_desc *desc)
 
     inode->i_flags &= ~S_PRIVATE;
     ret = generic_file_mmap_prepare(desc);
-    inode->i_flags |= S_PRIVATE;
+    if (!ret)
+        inode->i_flags |= S_PRIVATE;
     return ret;
 }
 #endif
@@ -1697,9 +1699,15 @@ static int nm_process_payload(unsigned long user_addr)
         case NM_CMD_GET_VERSION: {
             size_t ver_len = strlen(NOMOUNT_VERSION);
 
-            if (unlikely(ver_len > sizeof(payload->buffer)))
-                ver_len = sizeof(payload->buffer);
+            /*
+             * Leave room for the terminator: data_size is what userspace
+             * will read and, unlike the rule lists, this op has always
+             * been consumed as a C string.
+             */
+            if (unlikely(ver_len >= sizeof(payload->buffer)))
+                ver_len = sizeof(payload->buffer) - 1;
             memcpy(payload->buffer, NOMOUNT_VERSION, ver_len);
+            payload->buffer[ver_len] = '\0';
             payload->data_size = ver_len;
             break;
         }
@@ -1719,7 +1727,7 @@ static int nm_process_payload(unsigned long user_addr)
                 }
                 h = *(struct nm_rule_hdr *)buf_ptr;
                 if (unlikely(!h.v_len || h.v_len >= PATH_MAX || h.r_len >= PATH_MAX) ||
-                        h.v_len + h.r_len > (size_t)(buf_end - buf_ptr) - sizeof(h)) {
+                        h.v_len + h.r_len > (size_t)(buf_end - buf_ptr - sizeof(h))) {
                     if (!payload->status) payload->status = -EINVAL;
                     break;
                 }
@@ -1744,7 +1752,7 @@ static int nm_process_payload(unsigned long user_addr)
                 int err;
                 if ((size_t)(buf_end - buf_ptr) < sizeof(h)) { payload->status = -EINVAL; break; }
                 h = *(struct nm_del_hdr *)buf_ptr;
-                if (!h.v_len || h.v_len > (size_t)(buf_end - buf_ptr) - sizeof(h)) { payload->status = -EINVAL; break; }
+                if (!h.v_len || h.v_len > (size_t)(buf_end - buf_ptr - sizeof(h))) { payload->status = -EINVAL; break; }
                 buf_ptr += sizeof(h);
                 err = __nomount_del_rule(buf_ptr, h.v_len, h.uid);
                 if (!payload->status) payload->status = err;
@@ -1887,6 +1895,13 @@ static void __exit nomount_exit(void)
     __nomount_clear_all(NM_CLEAR_UIDS | NM_CLEAR_RULES | NM_CLEAR_EXIT);
     mutex_unlock(&nomount_mutex);
     rcu_barrier();
+    /*
+     * The free callbacks defer the actual dput()/path_put() to system_wq;
+     * rcu_barrier() only guarantees that those callbacks have run and
+     * queued their work.  If NOMOUNT is built as a module, the work must
+     * also finish before our text goes away.
+     */
+    flush_scheduled_work();
     nm_info("Unloaded successfully\n");
 }
 

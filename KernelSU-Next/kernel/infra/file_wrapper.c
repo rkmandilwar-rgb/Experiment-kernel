@@ -537,8 +537,12 @@ static const struct dentry_operations ksu_file_wrapper_d_ops = {
 #define ksu_anon_inode_create_getfile_compat anon_inode_create_getfile
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 16, 0)
 #define ksu_anon_inode_create_getfile_compat anon_inode_getfile_secure
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)
 // There is no anon_inode_create_getfile before 4.19, but it's not difficult to implement it.
+// It cannot be anon_inode_getfile() though: that one installs every anonymous
+// file on the single global anon_inode_inode, and the caller below rewrites
+// i_mode/i_fop/SELinux sid of the inode it gets back, which would corrupt
+// every epoll/eventfd/timerfd/signalfd inode on the system.
 // https://cs.android.com/android/kernel/superproject/+/common-android12-5.10:common/fs/anon_inodes.c;l=58-125;drc=0d34ce8aa78e38affbb501690bcabec4df88620e
 
 // Borrow kernel's anon_inode_mnt, so that we don't need to mount one by ourselves.
@@ -572,6 +576,7 @@ ksu_anon_inode_make_secure_inode(const char *name,
 	return inode;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
 static struct file *ksu_anon_inode_create_getfile_compat(
 	const char *name, const struct file_operations *fops, void *priv,
 	int flags, const struct inode *context_inode)
@@ -605,6 +610,61 @@ err:
 	module_put(fops->owner);
 	return file;
 }
+#else
+/*
+ * alloc_file_pseudo() does not exist before 4.19, so open-code it with the
+ * primitives that do.  The dentry owns the inode reference from
+ * d_instantiate() on, which is why the post-instantiate error path only has
+ * to drop the path and never iput() the inode.
+ */
+static struct file *ksu_anon_inode_create_getfile_compat(
+	const char *name, const struct file_operations *fops, void *priv,
+	int flags, const struct inode *context_inode)
+{
+	struct inode *inode;
+	struct file *file;
+	struct qstr this;
+	struct path path;
+
+	if (fops->owner && !try_module_get(fops->owner))
+		return ERR_PTR(-ENOENT);
+
+	inode = ksu_anon_inode_make_secure_inode(name, context_inode);
+	if (IS_ERR(inode)) {
+		file = ERR_CAST(inode);
+		goto err;
+	}
+
+	this.name = name;
+	this.len = strlen(name);
+	this.hash = 0;
+
+	path.dentry = d_alloc_pseudo(anon_inode_mnt->mnt_sb, &this);
+	if (!path.dentry) {
+		iput(inode);
+		file = ERR_PTR(-ENOMEM);
+		goto err;
+	}
+	path.mnt = mntget(anon_inode_mnt);
+	d_instantiate(path.dentry, inode);
+
+	file = alloc_file(&path, OPEN_FMODE(flags), fops);
+	if (IS_ERR(file)) {
+		dput(path.dentry);
+		mntput(path.mnt);
+		goto err;
+	}
+
+	file->f_mapping = inode->i_mapping;
+	file->f_flags = flags & (O_ACCMODE | O_NONBLOCK);
+	file->private_data = priv;
+	return file;
+
+err:
+	module_put(fops->owner);
+	return file;
+}
+#endif
 #else
 struct file *ksu_anon_inode_create_getfile_compat(
 	const char *name, const struct file_operations *fops, void *priv,
@@ -712,7 +772,7 @@ done:
 
 void __init ksu_file_wrapper_init(void)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0) &&                          \
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0) &&                          \
 	LINUX_VERSION_CODE < KERNEL_VERSION(5, 16, 0)
 	static const struct file_operations tmp = { .owner = THIS_MODULE };
 	struct file *dummy = anon_inode_getfile("dummy", &tmp, NULL, 0);
