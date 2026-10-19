@@ -440,7 +440,6 @@ jobs:
           require 'CONFIG_THERMAL_GOV_USER_SPACE=y'
           require 'CONFIG_CPU_THERMAL=y'
           require 'CONFIG_DEVFREQ_THERMAL=y'
-          require 'CONFIG_CLOCK_THERMAL=y'
           require 'CONFIG_REGULATOR_COOLING_DEVICE=y'
           require 'CONFIG_THERMAL_TSENS=y'
           require 'CONFIG_QTI_VIRTUAL_SENSOR=y'
@@ -451,6 +450,23 @@ jobs:
           require 'CONFIG_QTI_BCL_PMIC5=y'
           require 'CONFIG_QTI_BCL_SOC_DRIVER=y'
           require_off 'CONFIG_THERMAL_EMULATION'
+          # These seven cannot bind on atoll (no matching DT node / no zone
+          # requests the governor).  Keep them out so a defconfig sync does
+          # not quietly bring dead probe paths back.
+          require_off 'CONFIG_CLOCK_THERMAL'
+          require_off 'CONFIG_THERMAL_GOV_FAIR_SHARE'
+          require_off 'CONFIG_THERMAL_GOV_BANG_BANG'
+          require_off 'CONFIG_THERMAL_GOV_POWER_ALLOCATOR'
+          require_off 'CONFIG_QTI_BUS_SCALING_COOLING_DEVICE'
+          require_off 'CONFIG_QTI_CX_IPEAK_COOLING_DEVICE'
+          require_off 'CONFIG_MSM_BCL_PERIPHERAL_CTL'
+          # Kernel-side skin throttling must stay enabled for the miatoll
+          # variants (the stock IDP DTS turns the zone off).
+          grep -q 'quiet-therm-step {' arch/arm64/boot/dts/qcom/cust-atoll-thermal.dtsi \
+            || { echo "::error::kernel skin mitigation disabled in the miatoll DTS"; exit 1; }
+          grep -A2 'quiet-therm-step {' arch/arm64/boot/dts/qcom/cust-atoll-thermal.dtsi \
+            | grep -q 'status = "ok";' \
+            || { echo "::error::quiet-therm-step is not enabled for miatoll"; exit 1; }
 
           # Performance scheduler pack (CASS + WALT/schedtune + touch boost)
           require 'CONFIG_SCHED_CASS=y'
