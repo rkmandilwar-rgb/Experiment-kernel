@@ -3,6 +3,25 @@
 		polling-delay = <5000>;
 	};
 
+	/*
+	 * Kernel-side skin mitigation.
+	 *
+	 * atoll-thermal.dtsi defines this zone (46/47/48/50/58 C, step_wise)
+	 * but the stock IDP device tree turns it off, leaving skin
+	 * throttling entirely to Xiaomi's thermal-engine.  That is fine on
+	 * MIUI and useless on a ROM without a thermal HAL, in which case the
+	 * kernel would only react at the 95-125 C SoC-internal trips.
+	 *
+	 * Turn it back on for the miatoll variants so the phone is protected
+	 * either way.  The mitigation is deliberately mild: 47 C caps the two
+	 * big cores at ~1.7 GHz and 50 C caps every core at ~1.5 GHz, which
+	 * keeps sustained power (and battery current) down without turning a
+	 * warm phone into a slow one.  The trip table itself is untouched.
+	 */
+	quiet-therm-step {
+		status = "ok";
+	};
+
 	backlight_therm {
 		polling-delay-passive = <0>;
 		polling-delay = <0>;
