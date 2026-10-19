@@ -973,6 +973,17 @@ void susfs_add_open_redirect(void __user **user_info) {
                 goto out_copy_to_user;
         }
 
+	/*
+	 * Both paths are later resolved by do_sys_open() with AT_FDCWD (the
+	 * original dirfd may belong to a completely different directory), so
+	 * only absolute paths make sense here.
+	 */
+	if (info.target_pathname[0] != '/' || info.redirected_pathname[0] != '/') {
+		info.err = -EINVAL;
+		SUSFS_LOGE("open_redirect requires absolute paths\n");
+		goto out_copy_to_user;
+	}
+
 	if (info.uid_scheme < UID_NON_APP_PROC || info.uid_scheme > UID_UMOUNTED_PROC) {
 		info.err = -EINVAL;
 		SUSFS_LOGE("invalid uid scheme: %d\n", info.uid_scheme);
@@ -1130,7 +1141,12 @@ struct filename *susfs_open_redirect_spoof_do_sys_openat(struct inode *inode) {
 	int srcu_idx = srcu_read_lock(&susfs_srcu_open_redirect);
 
 	hash_for_each_possible_rcu(OPEN_REDIRECT_HLIST, entry, node, inode->i_ino) {
+		/*
+		 * The hash bucket may hold unrelated inodes; matching on the
+		 * device alone would redirect an innocent file.
+		 */
 		if (!entry->reversed_lookup_only &&
+			entry->target_ino == inode->i_ino &&
 			entry->target_dev == inode->i_sb->s_dev)
 		{
 			switch(entry->info.uid_scheme) {
@@ -1176,6 +1192,7 @@ int susfs_open_redirect_spoof_vfs_readlink(struct inode *inode, char __user *buf
 
 	hash_for_each_possible_rcu(OPEN_REDIRECT_HLIST, entry, node, inode->i_ino) {
 		if (entry->reversed_lookup_only &&
+			entry->target_ino == inode->i_ino &&
 			entry->target_dev == inode->i_sb->s_dev)
 		{
 			SUSFS_LOGI("spoof path '%s' to '%s'\n",
@@ -1206,6 +1223,7 @@ int susfs_open_redirect_spoof_do_proc_readlink(struct inode *inode, char *tmp_bu
 
 	hash_for_each_possible_rcu(OPEN_REDIRECT_HLIST, entry, node, inode->i_ino) {
 		if (entry->reversed_lookup_only &&
+			entry->target_ino == inode->i_ino &&
 			entry->target_dev == inode->i_sb->s_dev)
 		{
 			SUSFS_LOGI("spoof path '%s' to '%s'\n",
@@ -1235,6 +1253,7 @@ int susfs_open_redirect_spoof_show_map_vma_srcu(struct inode *inode, unsigned lo
 
 	hash_for_each_possible_rcu(OPEN_REDIRECT_HLIST, entry, node, inode->i_ino) {
 		if (entry->reversed_lookup_only &&
+			entry->target_ino == inode->i_ino &&
 			entry->target_dev == inode->i_sb->s_dev)
 		{
 			SUSFS_LOGI("spoof maps ino/dev/name for redirected path: '%s'\n",

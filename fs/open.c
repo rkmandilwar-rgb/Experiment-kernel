@@ -1086,6 +1086,19 @@ struct file *filp_clone_open(struct file *oldfile)
 }
 EXPORT_SYMBOL(filp_clone_open);
 
+#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
+/*
+ * Returns the replacement filename when @inode carries an open-redirect mark
+ * that applies to the current caller, NULL otherwise.
+ */
+static struct filename *susfs_open_redirect_target(struct inode *inode)
+{
+	if (!inode || !SUSFS_IS_INODE_OPEN_REDIRECT_WITHOUT_UID_CHECK(inode))
+		return NULL;
+	return susfs_open_redirect_spoof_do_sys_openat(inode);
+}
+#endif
+
 long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 {
 	struct open_flags op;
@@ -1103,27 +1116,50 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 	if (fd >= 0) {
 		struct file *f = do_filp_open(dfd, tmp, &op);
 #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
-		/*
-		 * Target flagged for open-redirect: close the first open and
-		 * re-open through the redirected path (uid<2000 callers only,
-		 * enforced inside susfs_open_redirect_spoof_do_sys_openat()).
-		 */
-		/*
-		 * WITHOUT_UID_CHECK: the hlist carries the caller policy
-		 * (UID_NON_APP_PROC / UID_ROOT_PROC_EXCEPT_SU_PROC / ...) and
-		 * susfs_open_redirect_spoof_do_sys_openat() enforces it. Gating
-		 * here on "umounted app" would silently disable the non-app and
-		 * root schemes.
-		 */
-		if (!IS_ERR(f) && f->f_path.dentry &&
-		    SUSFS_IS_INODE_OPEN_REDIRECT_WITHOUT_UID_CHECK(f->f_path.dentry->d_inode)) {
-			struct filename *fake_filename =
-				susfs_open_redirect_spoof_do_sys_openat(f->f_path.dentry->d_inode);
-			if (fake_filename && !IS_ERR(fake_filename)) {
-				filp_close(f, NULL);
-				f = do_filp_open(dfd, fake_filename, &op);
-				putname(fake_filename);
+		{
+			struct filename *redirect = NULL;
+			struct path probe;
+			bool probed = false;
+			int first_err = IS_ERR(f) ? PTR_ERR(f) : 0;
+
+			/*
+			 * WITHOUT_UID_CHECK: the hlist carries the caller policy
+			 * (UID_NON_APP_PROC / UID_ROOT_PROC_EXCEPT_SU_PROC / ...) and
+			 * susfs_open_redirect_spoof_do_sys_openat() enforces it. Gating
+			 * here on "umounted app" would silently disable those schemes.
+			 */
+			if (!first_err && f->f_path.dentry)
+				redirect = susfs_open_redirect_target(d_inode(f->f_path.dentry));
+
+			/*
+			 * The redirect must also work when the caller is denied on the
+			 * decoy file (DAC/SELinux).  Resolving the path without open
+			 * permission is enough to find the marked inode.
+			 */
+			if (!redirect && (first_err == -EACCES || first_err == -EPERM) &&
+			    !kern_path(tmp->name, 0, &probe)) {
+				probed = true;
+				redirect = susfs_open_redirect_target(d_inode(probe.dentry));
 			}
+
+			if (redirect && !IS_ERR(redirect)) {
+				struct file *redirected;
+
+				if (!first_err)
+					filp_close(f, NULL);
+				/*
+				 * Rules are validated as absolute when they are added, so
+				 * AT_FDCWD is the correct base here.
+				 */
+				redirected = do_filp_open(AT_FDCWD, redirect, &op);
+				if (IS_ERR(redirected) && !first_err)
+					redirected = do_filp_open(dfd, tmp, &op);
+				f = redirected;
+			}
+			if (!IS_ERR_OR_NULL(redirect))
+				putname(redirect);
+			if (probed)
+				path_put(&probe);
 		}
 #endif
 		if (IS_ERR(f)) {

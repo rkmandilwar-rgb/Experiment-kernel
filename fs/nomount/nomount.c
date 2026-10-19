@@ -126,12 +126,24 @@ static bool nm_resolve_rule(struct nomount_dir_node *dir_node, const char *name,
     return false;
 }
 
-static void nm_dir_rcu_free(struct rcu_head *head)
+static void nm_dir_free_work(struct work_struct *work)
 {
-    struct nomount_dir_node *dir = container_of(head, struct nomount_dir_node, rcu);
+    struct nomount_dir_node *dir = container_of(work, struct nomount_dir_node, free_work);
     if (dir->pinned_dentry) dput(dir->pinned_dentry);
     kfree(rcu_dereference_raw(dir->children));
     kfree(dir);
+}
+
+static void nm_dir_rcu_free(struct rcu_head *head)
+{
+    struct nomount_dir_node *dir = container_of(head, struct nomount_dir_node, rcu);
+    /*
+     * dput() can take the final iput() -> evict_inode() path and sleep, which
+     * is illegal in an RCU (softirq) callback.  Wait out the grace period,
+     * then finish the release from process context.
+     */
+    INIT_WORK(&dir->free_work, nm_dir_free_work);
+    schedule_work(&dir->free_work);
 }
 
 static void nm_dir_put(struct nomount_dir_node *dir_node)
@@ -512,15 +524,31 @@ static ssize_t nm_write_iter(struct kiocb *iocb, struct iov_iter *from)
 
 static int nm_mmap(struct file *file, struct vm_area_struct *vma)
 {
-    int ret = generic_file_mmap(file, vma);
-    return ret ? ret : (file_inode(file)->i_flags &= ~S_PRIVATE, 0);
+    struct inode *inode = file_inode(file);
+    int ret;
+
+    /*
+     * S_PRIVATE keeps the LSM hooks away from the synthetic inode.  The old
+     * code cleared it permanently on the first successful mmap, silently
+     * changing the security behaviour of every later operation on this
+     * shared inode; only this call needs it out of the way.
+     */
+    inode->i_flags &= ~S_PRIVATE;
+    ret = generic_file_mmap(file, vma);
+    inode->i_flags |= S_PRIVATE;
+    return ret;
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 16, 0)
 static int nm_mmap_prepare(struct vm_area_desc *desc)
 {
-    int ret = generic_file_mmap_prepare(desc);
-    return ret ? ret : (file_inode(desc->file)->i_flags &= ~S_PRIVATE, 0);
+    struct inode *inode = file_inode(desc->file);
+    int ret;
+
+    inode->i_flags &= ~S_PRIVATE;
+    ret = generic_file_mmap_prepare(desc);
+    inode->i_flags |= S_PRIVATE;
+    return ret;
 }
 #endif
 
@@ -565,9 +593,12 @@ static int nm_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 
 static ssize_t nm_listxattr(struct dentry *dentry, char *buffer, size_t size)
 {
-    struct nm_inode_info *info = d_backing_inode(dentry)->i_private;
+    struct inode *v_inode = d_backing_inode(dentry);
+    struct nm_inode_info *info;
     struct inode *r_inode;
 
+    if (unlikely(!v_inode)) return -EIO;
+    info = v_inode->i_private;
     if (unlikely(!info)) return -EIO;
     if (!info->r_path.dentry) return 0;
 
@@ -586,9 +617,11 @@ static int nm_getattr(IDMAP_ARG const struct path *path, struct kstat *stat, u32
     struct dentry *dentry = path->dentry;
 #endif
     struct inode *v_inode = d_backing_inode(dentry);
-    struct nm_inode_info *info = v_inode->i_private;
+    struct nm_inode_info *info;
     int res = 0;
 
+    if (unlikely(!v_inode)) return -EIO;
+    info = v_inode->i_private;
     if (unlikely(!info)) return -EIO;
     if (unlikely(!info->r_path.dentry))
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
@@ -698,12 +731,16 @@ static struct dentry *nm_dir_lookup(struct inode *dir, struct dentry *dentry, un
     uid_t fsuid = current_fsuid().val;
     struct dentry *res;
 
+    if (unlikely(!info))
+        goto negative_dentry;
+
     if (unlikely(nomount_is_uid_blocked(fsuid)))
         goto negative_dentry;
 
-    if (info->dir_node)
-        if ((dir_node = READ_ONCE(info->dir_node)) && nm_resolve_rule(dir_node, dentry->d_name.name, dentry->d_name.len, fsuid, &rule_info))
-            return nm_materialize_rule(dir, dentry, &rule_info);
+    dir_node = READ_ONCE(info->dir_node);
+    if (dir_node &&
+        nm_resolve_rule(dir_node, dentry->d_name.name, dentry->d_name.len, fsuid, &rule_info))
+        return nm_materialize_rule(dir, dentry, &rule_info);
 
     if (!info->r_path.dentry)
         goto negative_dentry;
@@ -1257,17 +1294,33 @@ static void nm_free_leaf(struct nomount_leaf *leaf)
     kfree(leaf);
 }
 
-static void nm_rule_array_free(struct rcu_head *head)
+static void nm_rule_array_free_work(struct work_struct *work)
 {
-    struct nm_rule_array *arr = container_of(head, struct nm_rule_array, rcu);
+    struct nm_rule_array *arr = container_of(work, struct nm_rule_array, free_work);
     for (int i = 0; i < arr->count; i++)
         if (arr->rules[i].r_path.dentry) path_put(&arr->rules[i].r_path);
     kfree(arr);
 }
 
+static void nm_rule_array_free(struct rcu_head *head)
+{
+    struct nm_rule_array *arr = container_of(head, struct nm_rule_array, rcu);
+    /* path_put() may sleep; RCU callbacks run in softirq context. */
+    INIT_WORK(&arr->free_work, nm_rule_array_free_work);
+    schedule_work(&arr->free_work);
+}
+
+static void nm_leaf_free_work(struct work_struct *work)
+{
+    nm_free_leaf(container_of(work, struct nomount_leaf, free_work));
+}
+
 static void nm_leaf_rcu_free(struct rcu_head *head)
 {
-    nm_free_leaf(container_of(head, struct nomount_leaf, rcu));
+    struct nomount_leaf *leaf = container_of(head, struct nomount_leaf, rcu);
+    /* nm_free_leaf() path_put()s and dputs; not allowed in softirq context. */
+    INIT_WORK(&leaf->free_work, nm_leaf_free_work);
+    schedule_work(&leaf->free_work);
 }
 
 static int nomount_generate_virtual_topology(struct nomount_leaf *target, unsigned int uid)
@@ -1310,12 +1363,24 @@ static int nomount_generate_virtual_topology(struct nomount_leaf *target, unsign
             struct inode *inode = d_backing_inode(path.dentry);
             struct nomount_dir_node *dir = NULL;
             int hijacked = 0;
-            bool virtual = inode->i_op == &nm_dir_iops;
+            bool virtual;
+
+            if (unlikely(!inode)) {
+                err = -ENOENT;
+                path_put(&path);
+                break;
+            }
+            virtual = inode->i_op == &nm_dir_iops;
             if (!S_ISDIR(inode->i_mode)) {
                 err = -ENOTDIR;
             } else if (virtual) {
-                dir = ((struct nm_inode_info *)inode->i_private)->dir_node;
-                atomic_inc(&dir->refs);
+                struct nm_inode_info *v_info = inode->i_private;
+
+                dir = v_info ? v_info->dir_node : NULL;
+                if (!dir)
+                    err = -ENOENT;
+                else
+                    atomic_inc(&dir->refs);
             } else {
                 struct nm_dir_ops *iop = nm_get_nm_iop(smp_load_acquire(&inode->i_op));
                 struct nm_dir_ops *fop = nm_get_nm_fop(smp_load_acquire(&inode->i_fop));
@@ -1381,6 +1446,12 @@ static struct nomount_dir_node *nm_detach_leaf_locked(struct nomount_leaf *leaf)
     if (IS_ERR(parent)) return parent;
     if (leaf->this_dir) leaf->this_dir->owner = NULL;
     hash_del_rcu(&leaf->ht_node);
+    /*
+     * Retire the rule array before the leaf is handed to RCU: once
+     * call_rcu() is issued a grace period can complete and free the leaf,
+     * so nothing may touch it afterwards.
+     */
+    nm_retire_rules(leaf);
     call_rcu(&leaf->rcu, nm_leaf_rcu_free);
     return parent;
 }
@@ -1393,7 +1464,6 @@ static int nomount_prune_empty_virtual_dirs(struct nomount_dir_node *dir)
         if (rules && (rules->count != 1 || !(rules->rules[0].flags & NM_FLAG_VIRTUAL_DIR))) break;
         dir = nm_detach_leaf_locked(leaf);
         if (IS_ERR(dir)) return PTR_ERR(dir);
-        nm_retire_rules(leaf);
     }
     return 0;
 }
@@ -1532,10 +1602,13 @@ static int __nomount_del_rule(const char *path, u16 len, unsigned int uid)
     }
 
     if (!stub_virtual && old->count == 1 && (!leaf->this_dir || !rcu_access_pointer(leaf->this_dir->children))) {
+        /*
+         * nm_detach_leaf_locked() retires the rule array (RCU_INIT_POINTER +
+         * call_rcu) before queueing the leaf itself, so the rule array must
+         * not be queued here as well and @leaf must not be touched again.
+         */
         parent = nm_detach_leaf_locked(leaf);
         if (IS_ERR(parent)) return PTR_ERR(parent);
-        call_rcu(&old->rcu, nm_rule_array_free);
-        rcu_assign_pointer(leaf->rules, NULL);
         return parent ? nomount_prune_empty_virtual_dirs(parent) : 0;
     }
 

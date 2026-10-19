@@ -30,6 +30,14 @@ struct ksu_file_wrapper {
 
 static struct ksu_file_wrapper *ksu_create_file_wrapper(struct file *fp);
 
+/*
+ * __fput() calls fops_put(file->f_op) *after* ->release() has returned.
+ * Handing it a static set of operations keeps the module-reference counting
+ * balanced without ever exposing a NULL f_op to a concurrent user of a
+ * shared struct file.
+ */
+static const struct file_operations ksu_wrapper_dead_fops = { };
+
 static int ksu_wrapper_open(struct inode *ino, struct file *fp)
 {
     struct path *orig_path = fp->f_path.dentry->d_fsdata;
@@ -58,6 +66,12 @@ static int ksu_wrapper_open(struct inode *ino, struct file *fp)
         return PTR_ERR(wrapper);
     }
     fp->private_data = wrapper;
+    /*
+     * The VFS set f_mapping from the anon inode before calling ->open().
+     * Copies of this file must fault through the real file's address space
+     * (and file_ra_state_init() below in do_dentry_open() uses it too).
+     */
+    fp->f_mapping = orig_file->f_mapping;
     new_fops = fops_get(&wrapper->ops);
     replace_fops(fp, new_fops);
     return 0;
@@ -88,33 +102,61 @@ static ssize_t ksu_wrapper_write(struct file *fp, const char __user *ptr, size_t
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 16, 0)
 static ssize_t ksu_wrapper_read_iter(struct kiocb *iocb, struct iov_iter *iovi) {
-	struct ksu_file_wrapper* data = iocb->ki_filp->private_data;
+	struct file* wrapper = iocb->ki_filp;
+	struct ksu_file_wrapper* data = wrapper->private_data;
 	struct file* orig = data->orig;
+	ssize_t ret;
+
+	/*
+	 * The kiocb belongs to the caller.  For AIO it is the persistent
+	 * aio_kiocb, and kiocb_free() (fs/aio.c) does fput(ki_filp) when the
+	 * request completes: leaving the original file here would drop a
+	 * reference we never took and leak the wrapper reference.  Restore it
+	 * before returning.
+	 */
 	iocb->ki_filp = orig;
-	return orig->f_op->read_iter(iocb, iovi);
+	ret = orig->f_op->read_iter(iocb, iovi);
+	iocb->ki_filp = wrapper;
+	return ret;
 }
 
 static ssize_t ksu_wrapper_write_iter(struct kiocb *iocb, struct iov_iter *iovi) {
-	struct ksu_file_wrapper* data = iocb->ki_filp->private_data;
+	struct file* wrapper = iocb->ki_filp;
+	struct ksu_file_wrapper* data = wrapper->private_data;
 	struct file* orig = data->orig;
+	ssize_t ret;
+
+	/* See ksu_wrapper_read_iter() for why ki_filp must be restored. */
 	iocb->ki_filp = orig;
-	return orig->f_op->write_iter(iocb, iovi);
+	ret = orig->f_op->write_iter(iocb, iovi);
+	iocb->ki_filp = wrapper;
+	return ret;
 }
 #endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
 static int ksu_wrapper_iopoll(struct kiocb *kiocb, struct io_comp_batch* icb, unsigned int v) {
-	struct ksu_file_wrapper* data = kiocb->ki_filp->private_data;
+	struct file* wrapper = kiocb->ki_filp;
+	struct ksu_file_wrapper* data = wrapper->private_data;
 	struct file* orig = data->orig;
+	int ret;
+
 	kiocb->ki_filp = orig;
-	return orig->f_op->iopoll(kiocb, icb, v);
+	ret = orig->f_op->iopoll(kiocb, icb, v);
+	kiocb->ki_filp = wrapper;
+	return ret;
 }
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)
 static int ksu_wrapper_iopoll(struct kiocb *kiocb, bool spin) {
-	struct ksu_file_wrapper* data = kiocb->ki_filp->private_data;
+	struct file* wrapper = kiocb->ki_filp;
+	struct ksu_file_wrapper* data = wrapper->private_data;
 	struct file* orig = data->orig;
+	int ret;
+
 	kiocb->ki_filp = orig;
-	return orig->f_op->iopoll(kiocb, spin);
+	ret = orig->f_op->iopoll(kiocb, spin);
+	kiocb->ki_filp = wrapper;
+	return ret;
 }
 #endif
 
@@ -157,6 +199,9 @@ static long ksu_wrapper_compat_ioctl(struct file *fp, unsigned int cmd, unsigned
 static int ksu_wrapper_mmap(struct file *fp, struct vm_area_struct * vma) {
 	struct ksu_file_wrapper* data = fp->private_data;
 	struct file* orig = data->orig;
+
+	if (!orig->f_op->mmap)
+		return -ENODEV;
 	return orig->f_op->mmap(orig, vma);
 }
 
@@ -376,13 +421,21 @@ static int ksu_wrapper_fadvise(struct file *fp, loff_t off1, loff_t off2, int fl
 static void ksu_release_file_wrapper(struct ksu_file_wrapper *data);
 
 static int ksu_wrapper_release(struct inode *inode, struct file *filp) {
-	// https://cs.android.com/android/kernel/superproject/+/common-android-mainline:common/fs/file_table.c;l=467-473;drc=3be0b283b562eabbc2b1f3bb534dc8903079bbaa
+	struct ksu_file_wrapper *data = filp->private_data;
+
 	// f_op->release is called before fops_put(f_op), so we put it manually.
 	fops_put(filp->f_op);
-	// prevent it from being put again
-	filp->f_op = NULL;
-	ksu_release_file_wrapper(filp->private_data);
-    return 0;
+	/*
+	 * __fput() will fops_put() file->f_op after we return.  Leave a static
+	 * (owner-less) set of operations there instead of NULL: setting it to
+	 * NULL would make any concurrent user of a shared struct file dereference
+	 * a NULL f_op, and leaving the wrapper's ops would dereference memory we
+	 * free below.
+	 */
+	filp->f_op = &ksu_wrapper_dead_fops;
+	filp->private_data = NULL;
+	ksu_release_file_wrapper(data);
+	return 0;
 }
 
 static struct ksu_file_wrapper* ksu_create_file_wrapper(struct file* fp) {
@@ -620,6 +673,12 @@ int ksu_install_file_wrapper(int fd)
 	}
 	// Install open file operation for inode.
 	wrapper_inode->i_fop = &ksu_file_wrapper_inode_fops;
+	/*
+	 * mmap() (and the ->fault path) is driven by vma->vm_file, which is the
+	 * wrapper.  Use the real file's address space so page faults resolve
+	 * against the file the caller actually opened, like overlayfs does.
+	 */
+	wrapper_file->f_mapping = orig_file->f_mapping;
 
 	struct path *orig_path = kmalloc(sizeof(struct path), GFP_KERNEL);
 	if (!orig_path) {

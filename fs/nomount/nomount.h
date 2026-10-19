@@ -13,6 +13,7 @@
 #include <linux/highmem.h>
 #include <linux/version.h>
 #include <linux/compat.h>
+#include <linux/workqueue.h>
 
 #define NOMOUNT_BASE_VERSION "21"
 #ifdef NOMOUNT_COMMIT_COUNT
@@ -90,6 +91,7 @@ struct nomount_child_array {
 
 struct nomount_dir_node {
     struct rcu_head rcu;
+    struct work_struct free_work;   /* ->dput()s pinned_dentry in process context */
     struct nomount_child_array __rcu *children;
     atomic_t refs;
     struct dentry *pinned_dentry;
@@ -105,6 +107,7 @@ struct nm_rule {
 
 struct nm_rule_array {
     struct rcu_head rcu;
+    struct work_struct free_work;   /* ->path_put()s the rules in process context */
     int count;
     struct nm_rule rules[];
 };
@@ -120,6 +123,7 @@ struct nomount_leaf {
     u16 child_len;
     struct hlist_node ht_node;
     struct rcu_head rcu;
+    struct work_struct free_work;   /* ->nm_free_leaf() in process context */
     char paths[];
 };
 

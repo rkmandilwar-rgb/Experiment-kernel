@@ -47,6 +47,18 @@
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
 extern bool susfs_is_inode_sus_path(struct inode *inode);
 extern const struct qstr susfs_fake_qstr_name;
+
+/*
+ * The reserved fake name is an internal alias used to hide sus paths.  It
+ * must never be created, linked to or renamed over: doing so would leave a
+ * file with that name in the user-visible namespace and would make e.g.
+ * open(O_CREAT | O_EXCL) on a hidden path succeed instead of failing.
+ */
+static inline bool susfs_is_reserved_fake_name(const struct qstr *name)
+{
+	return name->len == susfs_fake_qstr_name.len &&
+	       !memcmp(name->name, susfs_fake_qstr_name.name, name->len);
+}
 #endif
 #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
 extern struct filename *susfs_open_redirect_spoof_do_sys_openat(struct inode *inode);
@@ -3081,6 +3093,10 @@ static int may_delete(struct vfsmount *mnt, struct inode *dir, struct dentry *vi
 static inline int may_create(struct vfsmount *mnt, struct inode *dir, struct dentry *child)
 {
 	struct user_namespace *s_user_ns;
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	if (unlikely(susfs_is_reserved_fake_name(&child->d_name)))
+		return -EACCES;
+#endif
 	audit_inode_child(dir, child, AUDIT_TYPE_CHILD_CREATE);
 	if (child->d_inode)
 		return -EEXIST;
@@ -3273,7 +3289,12 @@ static inline int open_to_namei_flags(int flag)
 static int may_o_create(const struct path *dir, struct dentry *dentry, umode_t mode)
 {
 	struct user_namespace *s_user_ns;
-	int error = security_path_mknod(dir, dentry, mode, 0);
+	int error;
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	if (unlikely(susfs_is_reserved_fake_name(&dentry->d_name)))
+		return -EACCES;
+#endif
+	error = security_path_mknod(dir, dentry, mode, 0);
 	if (error)
 		return error;
 
@@ -4738,6 +4759,16 @@ int vfs_rename2(struct vfsmount *mnt,
 
 	if (source == target)
 		return 0;
+
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	/*
+	 * Renaming over the reserved alias would publish a name that susfs uses
+	 * internally to re-test the dcache, and would make the hidden path
+	 * reachable again through that alias.
+	 */
+	if (unlikely(susfs_is_reserved_fake_name(&new_dentry->d_name)))
+		return -EACCES;
+#endif
 
 	error = may_delete(mnt, old_dir, old_dentry, is_dir);
 	if (error)
