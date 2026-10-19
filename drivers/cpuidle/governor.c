@@ -83,7 +83,23 @@ int cpuidle_governor_latency_req(unsigned int cpu)
 {
 	int global_req = pm_qos_request_for_cpu(PM_QOS_CPU_DMA_LATENCY, cpu);
 	struct device *device = get_cpu_device(cpu);
-	int device_req = dev_pm_qos_raw_read_value(device);
+	int device_req;
+
+	if (!device)
+		return global_req;
+
+	device_req = dev_pm_qos_raw_read_value(device);
+	/*
+	 * Zero is the "no constraint" value for the per-device resume
+	 * latency: dev_pm_qos_raw_read_value() returns it both when the
+	 * device has no QoS object and when no resume-latency request is
+	 * pending.  Treating it as a hard zero-latency constraint would
+	 * clamp TEO to state 0 on every CPU (the global CPU-DMA limit is
+	 * the 2000 s default in that case), so fall back to the global
+	 * limit instead.
+	 */
+	if (!device_req)
+		return global_req;
 
 	return device_req < global_req ? device_req : global_req;
 }
