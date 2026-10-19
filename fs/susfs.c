@@ -119,8 +119,8 @@ void susfs_add_sus_path_loop(void __user **user_info) {
 		info.err = -ENOMEM;
 		goto out_copy_to_user;
 	}
-	strscpy(new_list->info.target_pathname, info.target_pathname, SUSFS_MAX_LEN_PATHNAME - 1);
-	strscpy(new_list->target_pathname, info.target_pathname, SUSFS_MAX_LEN_PATHNAME - 1);
+	strscpy(new_list->info.target_pathname, info.target_pathname, SUSFS_MAX_LEN_PATHNAME);
+	strscpy(new_list->target_pathname, info.target_pathname, SUSFS_MAX_LEN_PATHNAME);
 	INIT_LIST_HEAD(&new_list->list);
 	mutex_lock(&susfs_mutex_lock_sus_path);
 	list_add_tail_rcu(&new_list->list, &LH_SUS_PATH_LOOP);
@@ -862,7 +862,13 @@ out_copy_to_user:
 #ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
 static char *fake_cmdline_or_bootconfig = NULL;
 DEFINE_STATIC_KEY_FALSE(susfs_is_fake_cmdline_or_bootconfig_buffer_set);
-static DEFINE_SEQLOCK(susfs_fake_cmdline_or_bootconfig_seqlock);
+/*
+ * The fake cmdline is installed once and never freed. A mutex (instead of
+ * the old seqlock) serialises the one-time allocation, protects the string
+ * while /proc/cmdline prints it, and lets the printer avoid a per-read
+ * bounce buffer.
+ */
+static DEFINE_MUTEX(susfs_fake_cmdline_mutex);
 
 void susfs_set_cmdline_or_bootconfig(void __user **user_info) {
 	struct st_susfs_spoof_cmdline_or_bootconfig *info = (struct st_susfs_spoof_cmdline_or_bootconfig *)kzalloc(sizeof(struct st_susfs_spoof_cmdline_or_bootconfig), GFP_KERNEL);
@@ -886,19 +892,19 @@ void susfs_set_cmdline_or_bootconfig(void __user **user_info) {
 		goto out_copy_to_user;
 	}
 
+	mutex_lock(&susfs_fake_cmdline_mutex);
 	if (!fake_cmdline_or_bootconfig) {
 		fake_cmdline_or_bootconfig = (char *)kzalloc(SUSFS_FAKE_CMDLINE_OR_BOOTCONFIG_SIZE, GFP_KERNEL);
 		if (!fake_cmdline_or_bootconfig) {
+			mutex_unlock(&susfs_fake_cmdline_mutex);
 			info->err = -ENOMEM;
 			goto out_copy_to_user;
 		}
 	}
-
-	write_seqlock(&susfs_fake_cmdline_or_bootconfig_seqlock);
 	strscpy(fake_cmdline_or_bootconfig,
 			info->fake_cmdline_or_bootconfig,
-			SUSFS_FAKE_CMDLINE_OR_BOOTCONFIG_SIZE - 1);
-	write_sequnlock(&susfs_fake_cmdline_or_bootconfig_seqlock);
+			SUSFS_FAKE_CMDLINE_OR_BOOTCONFIG_SIZE);
+	mutex_unlock(&susfs_fake_cmdline_mutex);
 
 	if (!static_key_enabled(&susfs_is_fake_cmdline_or_bootconfig_buffer_set))
 		static_branch_enable(&susfs_is_fake_cmdline_or_bootconfig_buffer_set);
@@ -918,9 +924,6 @@ out_copy_to_user:
 }
 
 int susfs_spoof_cmdline_or_bootconfig(struct seq_file *m) {
-	unsigned seq;
-	char *buf;
-
 	/*
 	 * /proc/cmdline is world-readable and is read long before the susfs
 	 * daemon installs a fake cmdline: without this guard the NULL
@@ -929,16 +932,15 @@ int susfs_spoof_cmdline_or_bootconfig(struct seq_file *m) {
 	if (!static_key_enabled(&susfs_is_fake_cmdline_or_bootconfig_buffer_set))
 		return -EINVAL;
 
-	buf = (char *)kmalloc(SUSFS_FAKE_CMDLINE_OR_BOOTCONFIG_SIZE, GFP_KERNEL);
-	if (!buf) {
-		return -ENOMEM;
-	}
-	do {
-		seq = read_seqbegin(&susfs_fake_cmdline_or_bootconfig_seqlock);
-		strscpy(buf, fake_cmdline_or_bootconfig, SUSFS_FAKE_CMDLINE_OR_BOOTCONFIG_SIZE);
-	} while (read_seqretry(&susfs_fake_cmdline_or_bootconfig_seqlock, seq));
-	seq_puts(m, buf);
-	kfree(buf);
+	/*
+	 * Print straight from the (never freed) buffer under the mutex. This
+	 * used to kmalloc + strscpy an 8 KB bounce buffer on every single
+	 * read of /proc/cmdline, i.e. a userspace-triggerable slab storm.
+	 */
+	mutex_lock(&susfs_fake_cmdline_mutex);
+	if (likely(fake_cmdline_or_bootconfig))
+		seq_puts(m, fake_cmdline_or_bootconfig);
+	mutex_unlock(&susfs_fake_cmdline_mutex);
 	return 0;
 }
 #endif
@@ -957,6 +959,8 @@ void susfs_add_open_redirect(void __user **user_info) {
 	struct inode *target_inode, *redirected_inode;
 	bool is_first_dup_found = false;
 	bool is_second_dup_found = false;
+	unsigned long old_redirected_ino = 0;
+	int bkt;
 
 	if (copy_from_user(&info, (struct st_susfs_open_redirect __user*)*user_info, sizeof(info))) {
 		info.err = -EFAULT;
@@ -1039,34 +1043,45 @@ void susfs_add_open_redirect(void __user **user_info) {
 	new_entry_redirected->reversed_lookup_only = true;
 	new_entry_redirected->spoofed_mnt_id = new_entry_target->spoofed_mnt_id;
 	memcpy(&new_entry_redirected->spoofed_kstatfs, &new_entry_target->spoofed_kstatfs, sizeof(struct kstatfs));
-	strscpy(new_entry_redirected->info.target_pathname, info.redirected_pathname, SUSFS_MAX_LEN_PATHNAME - 1);
-	strscpy(new_entry_redirected->info.redirected_pathname, info.target_pathname, SUSFS_MAX_LEN_PATHNAME - 1);
+	strscpy(new_entry_redirected->info.target_pathname, info.redirected_pathname, SUSFS_MAX_LEN_PATHNAME);
+	strscpy(new_entry_redirected->info.redirected_pathname, info.target_pathname, SUSFS_MAX_LEN_PATHNAME);
 
-	// check for existing entries, delete it first if so
+	/*
+	 * Check for existing entries and delete them first. Walk the whole
+	 * table instead of one inode bucket: the old entry must be found even
+	 * if the target inode was replaced (rm+create keeps the pathname but
+	 * changes i_ino), and the matching reversed record lives in the *old*
+	 * redirected inode's bucket, not the new one.
+	 */
 	mutex_lock(&susfs_mutex_lock_open_redirect);
-	hash_for_each_possible_safe(OPEN_REDIRECT_HLIST, tmp_entry_target, tmp_hlist_node, node, target_inode->i_ino) {
-		if (!strcmp(tmp_entry_target->info.target_pathname, info.target_pathname)) {
-			if (tmp_entry_target->reversed_lookup_only) {
-				SUSFS_LOGE("duplicated '%s' cannot be removed/added because it is used for reversed lookup only\n", info.target_pathname);
-				mutex_unlock(&susfs_mutex_lock_open_redirect);
-				info.err = -EINVAL;
-				kfree(new_entry_redirected);
-				kfree(new_entry_target);
-				goto out_path_put_target_path;
-			}
-			is_first_dup_found = true;
-			hash_del_rcu(&tmp_entry_target->node);
-			break;
+	hash_for_each_safe(OPEN_REDIRECT_HLIST, bkt, tmp_hlist_node, tmp_entry_target, node) {
+		if (strcmp(tmp_entry_target->info.target_pathname, info.target_pathname))
+			continue;
+		if (tmp_entry_target->reversed_lookup_only) {
+			SUSFS_LOGE("duplicated '%s' cannot be removed/added because it is used for reversed lookup only\n", info.target_pathname);
+			mutex_unlock(&susfs_mutex_lock_open_redirect);
+			info.err = -EINVAL;
+			kfree(new_entry_redirected);
+			kfree(new_entry_target);
+			goto out_path_put_target_path;
 		}
+		is_first_dup_found = true;
+		old_redirected_ino = tmp_entry_target->redirected_ino;
+		hash_del_rcu(&tmp_entry_target->node);
+		break;
 	}
 
 	if (is_first_dup_found) {
-		hash_for_each_possible_safe(OPEN_REDIRECT_HLIST, tmp_entry_redirected, tmp_hlist_node, node, redirected_inode->i_ino) {
-			if (!strcmp(tmp_entry_redirected->info.target_pathname, info.redirected_pathname)) {
-				is_second_dup_found = true;
-				hash_del_rcu(&tmp_entry_redirected->node);
-				break;
-			}
+		hash_for_each_safe(OPEN_REDIRECT_HLIST, bkt, tmp_hlist_node, tmp_entry_redirected, node) {
+			if (!tmp_entry_redirected->reversed_lookup_only)
+				continue;
+			if (tmp_entry_redirected->target_ino != old_redirected_ino)
+				continue;
+			if (tmp_entry_redirected->redirected_ino != tmp_entry_target->target_ino)
+				continue;
+			is_second_dup_found = true;
+			hash_del_rcu(&tmp_entry_redirected->node);
+			break;
 		}
 		SUSFS_LOGI("target_pathname: '%s', redirected_pathname: '%s', target_i_ino: '%lu', redirected_i_ino: '%lu', target_s_dev: '%lu', redirected_s_dev: '%lu', uid_scheme: '%d', reversed_lookup_only: %d, spoofed_mnt_id: %d, is successfully added to OPEN_REDIRECT_HLIST\n",
 			new_entry_target->info.target_pathname, new_entry_target->info.redirected_pathname, new_entry_target->target_ino, new_entry_target->redirected_ino, new_entry_target->target_dev, new_entry_target->redirected_dev, new_entry_target->info.uid_scheme, new_entry_target->reversed_lookup_only, new_entry_target->spoofed_mnt_id);
@@ -1200,7 +1215,7 @@ int susfs_open_redirect_spoof_do_proc_readlink(struct inode *inode, char *tmp_bu
 				srcu_read_unlock(&susfs_srcu_open_redirect, srcu_idx);
 				return -ENAMETOOLONG;
 			}
-			strscpy(tmp_buf, entry->info.redirected_pathname, SUSFS_MAX_LEN_PATHNAME - 1);
+			strscpy(tmp_buf, entry->info.redirected_pathname, SUSFS_MAX_LEN_PATHNAME);
 			srcu_read_unlock(&susfs_srcu_open_redirect, srcu_idx);
 			return 0;
 		}
@@ -1579,13 +1594,30 @@ static int susfs_sdcard_monitor_fn(void *data)
 	g = fsnotify_alloc_group(&fsnotify_ops);
 #endif
 	if (IS_ERR(g)) {
-		return PTR_ERR(g);
+		ret = PTR_ERR(g);
+		g = NULL;
+		return ret;
 	}
 
 	ret = watch_one_dir(&g_watch);
+	if (ret) {
+		/*
+		 * Nothing will ever queue the cleanup work if the watch could
+		 * not be installed, so tear the group down here instead of
+		 * leaking it (and leaving the "not decrypted" key enabled
+		 * forever).
+		 */
+		struct fsnotify_group *grp = xchg(&g, NULL);
 
-	SUSFS_LOGI("ret: %d\n", ret);
+		SUSFS_LOGE("failed to watch %s (%d), giving up\n", g_watch.path, ret);
+		if (grp)
+			fsnotify_destroy_group(grp);
+		if (static_key_enabled(&susfs_is_sdcard_android_data_not_decrypted))
+			static_branch_disable(&susfs_is_sdcard_android_data_not_decrypted);
+		return ret;
+	}
 
+	SUSFS_LOGI("watching %s\n", g_watch.path);
 	return 0;
 }
 

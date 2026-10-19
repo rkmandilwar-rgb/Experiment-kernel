@@ -33,18 +33,32 @@ static struct ksu_file_wrapper *ksu_create_file_wrapper(struct file *fp);
 static int ksu_wrapper_open(struct inode *ino, struct file *fp)
 {
     struct path *orig_path = fp->f_path.dentry->d_fsdata;
-    struct file *orig_file =
-        dentry_open(orig_path, fp->f_flags, current_cred());
+    struct file *orig_file;
+    struct ksu_file_wrapper *wrapper;
+    const struct file_operations *new_fops;
+
+    /*
+     * d_fsdata is installed before fd_install(), so a plain reopen cannot
+     * race it. Still, this is the only path that dereferences the pointer
+     * unconditionally: fail cleanly instead of oopsing if it is ever lost
+     * (e.g. a future anon-inode dentry reuse).
+     */
+    if (unlikely(!orig_path)) {
+        pr_err("ksu_fdwrapper: reopen without stored origin path\n");
+        return -ENODEV;
+    }
+
+    orig_file = dentry_open(orig_path, fp->f_flags, current_cred());
     if (IS_ERR(orig_file)) {
         return PTR_ERR(orig_file);
     }
-    struct ksu_file_wrapper *wrapper = ksu_create_file_wrapper(orig_file);
+    wrapper = ksu_create_file_wrapper(orig_file);
     if (IS_ERR(wrapper)) {
         filp_close(orig_file, current->files);
         return PTR_ERR(wrapper);
     }
     fp->private_data = wrapper;
-    const struct file_operations *new_fops = fops_get(&wrapper->ops);
+    new_fops = fops_get(&wrapper->ops);
     replace_fops(fp, new_fops);
     return 0;
 }
@@ -302,8 +316,28 @@ static int ksu_wrapper_show_fdinfo(struct seq_file *m, struct file *f) {
 static ssize_t ksu_wrapper_copy_file_range(struct file *file_in, loff_t pos_in, struct file *file_out,
 		loff_t pos_out, size_t len, unsigned int flags) {
 	struct ksu_file_wrapper* data = file_out->private_data;
-	struct file* orig = data->orig;
-	return orig->f_op->copy_file_range(file_in, pos_in, orig, pos_out, len, flags);
+	struct file *orig_out, *orig_in = file_in;
+
+	if (unlikely(!data || !data->orig))
+		return -EINVAL;
+
+	/*
+	 * The VFS reaches this helper through file_out->f_op, so file_out is
+	 * always a wrapper - but the *source* may be wrapped too. Unwrap it
+	 * before calling into the filesystem, otherwise it would see the
+	 * anon-inode file instead of the real inode/mapping (same unwrapping
+	 * remap_file_range() already does below).
+	 */
+	if (file_in && file_in->f_op &&
+	    file_in->f_op->copy_file_range == ksu_wrapper_copy_file_range &&
+	    file_in->private_data)
+		orig_in = ((struct ksu_file_wrapper *)file_in->private_data)->orig;
+
+	orig_out = data->orig;
+	if (unlikely(!orig_out->f_op->copy_file_range))
+		return -EINVAL;
+
+	return orig_out->f_op->copy_file_range(orig_in, pos_in, orig_out, pos_out, len, flags);
 }
 #endif
 

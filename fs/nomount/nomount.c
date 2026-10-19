@@ -622,6 +622,7 @@ static int nm_setattr(IDMAP_ARG struct dentry *dentry, struct iattr *attr)
     if (!info->r_path.dentry) return 0;
 
     r_inode = d_backing_inode(info->r_path.dentry);
+    if (unlikely(!r_inode)) return -ENOENT;
     inode_lock(r_inode);
     err = notify_change(IDMAP_CALL info->r_path.dentry, attr, NULL);
     inode_unlock(r_inode);
@@ -708,6 +709,8 @@ static struct dentry *nm_dir_lookup(struct inode *dir, struct dentry *dentry, un
         goto negative_dentry;
 
     struct inode *r_dir = d_backing_inode(info->r_path.dentry);
+    if (unlikely(!r_dir || !r_dir->i_op))
+        goto negative_dentry;
     if (r_dir->i_op->lookup) {
         res = r_dir->i_op->lookup(r_dir, dentry, flags);
         if (!IS_ERR(res ? res : dentry)) nomount_hijack_dentry_ops(dir, res ? res : dentry, false);
@@ -731,7 +734,8 @@ static int nm_xattr_get(const struct xattr_handler *handler, struct dentry *dent
     struct nm_xattr_proxy *proxy = container_of(handler, struct nm_xattr_proxy, fake);
     if (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops) {
         struct nm_inode_info *info = inode->i_private;
-        if (unlikely(!info || !info->r_path.dentry)) return -ENODATA;
+        if (unlikely(!info || !info->r_path.dentry || !d_inode(info->r_path.dentry)))
+            return -ENODATA;
         return __vfs_getxattr(info->r_path.dentry, d_inode(info->r_path.dentry), xattr_full_name(handler, name), buffer, size FLAGS_VAL);
     }
 
@@ -745,7 +749,8 @@ static int nm_xattr__get(const struct xattr_handler *handler, struct dentry *den
     struct nm_xattr_proxy *proxy = container_of(handler, struct nm_xattr_proxy, fake);
     if (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops) {
         struct nm_inode_info *info = inode->i_private;
-        if (unlikely(!info || !info->r_path.dentry)) return -ENODATA;
+        if (unlikely(!info || !info->r_path.dentry || !d_inode(info->r_path.dentry)))
+            return -ENODATA;
         return __vfs_getxattr(info->r_path.dentry, d_inode(info->r_path.dentry), xattr_full_name(handler, name), buffer, size);
     }
 
@@ -760,7 +765,8 @@ static int nm_xattr_set(const struct xattr_handler *handler, IDMAP_ARG struct de
     struct nm_xattr_proxy *proxy = container_of(handler, struct nm_xattr_proxy, fake);
     if (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops) {
         struct nm_inode_info *info = inode->i_private;
-        if (unlikely(!info || !info->r_path.dentry)) return -ENODATA;
+        if (unlikely(!info || !info->r_path.dentry || !d_inode(info->r_path.dentry)))
+            return -ENODATA;
         return __vfs_setxattr(IDMAP_PATH(info->r_path) info->r_path.dentry, d_inode(info->r_path.dentry), xattr_full_name(handler, name), buffer, size, flags);
     }
     return proxy->orig->set(proxy->orig, IDMAP_CALL dentry, inode, name, buffer, size, flags);
@@ -1565,7 +1571,11 @@ static int __nomount_del_rule(const char *path, u16 len, unsigned int uid)
 
     rcu_assign_pointer(leaf->rules, array);
     call_rcu(&old->rcu, nm_rule_array_free);
-    return parent ? nomount_prune_empty_virtual_dirs(parent) : 0;
+    /*
+     * No leaf was detached on this path, so there is no parent to prune;
+     * the old code tested a variable that is always NULL here.
+     */
+    return 0;
 }
 
 static void __nomount_clear_all(int clear_flags)
@@ -1611,9 +1621,15 @@ static int nm_process_payload(unsigned long user_addr)
     payload->status = 0;
 
     switch (payload->cmd) {
-        case NM_CMD_GET_VERSION:
-            memcpy(payload->buffer, NOMOUNT_VERSION, (payload->data_size = strlen(NOMOUNT_VERSION)));
+        case NM_CMD_GET_VERSION: {
+            size_t ver_len = strlen(NOMOUNT_VERSION);
+
+            if (unlikely(ver_len > sizeof(payload->buffer)))
+                ver_len = sizeof(payload->buffer);
+            memcpy(payload->buffer, NOMOUNT_VERSION, ver_len);
+            payload->data_size = ver_len;
             break;
+        }
 
         case NM_CMD_ADD_RULE: {
             unsigned int data_size = payload->data_size, offset = payload->arg1;
@@ -1742,8 +1758,18 @@ static int nm_process_payload(unsigned long user_addr)
             payload->arg1 = start_idx;
             break;
         }
+
+        default:
+            payload->status = -EINVAL;
+            break;
     }
 
+    /*
+     * The payload was written through the kmap window; make those writes
+     * visible on aliasing-cache architectures before userspace can map it
+     * on arm64 this is a no-op, on highmem/VIVT ports it is required.
+     */
+    flush_dcache_page(page);
     kunmap(page);
     set_page_dirty_lock(page);
     put_page(page);

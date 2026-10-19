@@ -405,6 +405,22 @@ bool ksu_get_allow_list(int *array, u16 length, u16 *out_length, u16 *out_total,
     struct perm_data *p = NULL;
     u16 i = 0, j = 0;
     int iter;
+
+    /*
+     * The only failure this query can have is a caller asking for entries
+     * without giving them somewhere to go; report it instead of returning
+     * a hardcoded success (which made every caller's -EFAULT branch dead).
+     */
+    if (unlikely(length && !array)) {
+        if (out_length) {
+            *out_length = 0;
+        }
+        if (out_total) {
+            *out_total = 0;
+        }
+        return false;
+    }
+
     rcu_read_lock();
     hash_for_each_rcu (allow_list, iter, p, list) {
         // pr_info("get_allow_list uid: %d allow: %d\n", p->uid, p->allow);
@@ -549,9 +565,14 @@ static void migrate_profile(u32 version, struct app_profile *profile)
         }
         /* fall through */
     case 3:
-        if (profile->allow_su) {
-            profile->rp_config.profile.flags = FLAG_KSU_NO_NEW_PRIVS;
-        }
+        /*
+         * v2/v3 did not carry the flags field at all. Derive it from the
+         * entry itself instead of leaving the 776-byte legacy read to
+         * decide: only an allowed profile gets NO_NEW_PRIVS, everything
+         * else is explicitly zero.
+         */
+        profile->rp_config.profile.flags =
+            profile->allow_su ? FLAG_KSU_NO_NEW_PRIVS : 0;
         break;
     }
 
@@ -604,6 +625,16 @@ void ksu_load_allow_list()
 
 	while (true) {
 		struct app_profile profile;
+
+		/*
+		 * Pre-v4 records are 776 bytes while sizeof(struct app_profile)
+		 * is 784: the short read would leave the tail of the struct
+		 * (rp_config.profile.flags) holding whatever was on the stack,
+		 * and that garbage is then written back by
+		 * ksu_persistent_allow_list(). Zero the record first so a
+		 * legacy file can never leak stack contents into the allowlist.
+		 */
+		memset(&profile, 0, sizeof(profile));
 
 		ret = kernel_read(fp, &profile, app_profile_size, &off);
 
