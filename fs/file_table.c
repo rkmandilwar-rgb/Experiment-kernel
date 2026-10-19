@@ -318,6 +318,52 @@ struct file *alloc_file(const struct path *path, fmode_t mode,
 }
 EXPORT_SYMBOL(alloc_file);
 
+/**
+ * alloc_file_pseudo - Create a file for a pseudo filesystem
+ * @inode: inode to attach the file to
+ * @mnt: vfsmount to use
+ * @name: name of the file
+ * @flags: O_... flags with which the file is created
+ * @fops: file operations for the file
+ *
+ * Backport of the 4.19 helper: 4.14 has all the primitives it needs but not
+ * the function.  Unlike anon_inode_getfile(), the caller supplies the inode,
+ * so files created this way do not share the single global anon_inode_inode.
+ */
+struct file *alloc_file_pseudo(struct inode *inode, struct vfsmount *mnt,
+			       const char *name, int flags,
+			       const struct file_operations *fops)
+{
+	static const struct dentry_operations anon_ops = {
+		.d_dname = simple_dname
+	};
+	struct qstr this = QSTR_INIT(name, strlen(name));
+	struct path path;
+	struct file *file;
+
+	path.dentry = d_alloc_pseudo(mnt->mnt_sb, &this);
+	if (!path.dentry)
+		return ERR_PTR(-ENOMEM);
+	if (!mnt->mnt_sb->s_d_op)
+		d_set_d_op(path.dentry, &anon_ops);
+	path.mnt = mntget(mnt);
+	d_instantiate(path.dentry, inode);
+	file = alloc_file(&path, OPEN_FMODE(flags), fops);
+	if (IS_ERR(file)) {
+		ihold(inode);
+		path_put(&path);
+		return file;
+	}
+	/*
+	 * 4.14's alloc_file() takes an fmode_t and does not derive f_flags
+	 * from it, while 4.19's alloc_file() does.  Set it here so callers
+	 * see the same struct file on either kernel.
+	 */
+	file->f_flags = flags & (O_ACCMODE | O_NONBLOCK);
+	return file;
+}
+EXPORT_SYMBOL(alloc_file_pseudo);
+
 /* the real guts of fput() - releasing the last reference to file
  */
 static void __fput(struct file *file)

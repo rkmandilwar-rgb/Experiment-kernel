@@ -576,7 +576,11 @@ ksu_anon_inode_make_secure_inode(const char *name,
 	return inode;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
+/*
+ * alloc_file_pseudo() is a 4.19 helper.  4.14 has every primitive it needs,
+ * so fs/file_table.c provides a backport and this code is identical on both;
+ * only kernels older than 4.14 use the anon_inode_getfile() fallback below.
+ */
 static struct file *ksu_anon_inode_create_getfile_compat(
 	const char *name, const struct file_operations *fops, void *priv,
 	int flags, const struct inode *context_inode)
@@ -599,9 +603,7 @@ static struct file *ksu_anon_inode_create_getfile_compat(
 		goto err_iput;
 
 	file->f_mapping = inode->i_mapping;
-
 	file->private_data = priv;
-
 	return file;
 
 err_iput:
@@ -610,61 +612,6 @@ err:
 	module_put(fops->owner);
 	return file;
 }
-#else
-/*
- * alloc_file_pseudo() does not exist before 4.19, so open-code it with the
- * primitives that do.  The dentry owns the inode reference from
- * d_instantiate() on, which is why the post-instantiate error path only has
- * to drop the path and never iput() the inode.
- */
-static struct file *ksu_anon_inode_create_getfile_compat(
-	const char *name, const struct file_operations *fops, void *priv,
-	int flags, const struct inode *context_inode)
-{
-	struct inode *inode;
-	struct file *file;
-	struct qstr this;
-	struct path path;
-
-	if (fops->owner && !try_module_get(fops->owner))
-		return ERR_PTR(-ENOENT);
-
-	inode = ksu_anon_inode_make_secure_inode(name, context_inode);
-	if (IS_ERR(inode)) {
-		file = ERR_CAST(inode);
-		goto err;
-	}
-
-	this.name = name;
-	this.len = strlen(name);
-	this.hash = 0;
-
-	path.dentry = d_alloc_pseudo(anon_inode_mnt->mnt_sb, &this);
-	if (!path.dentry) {
-		iput(inode);
-		file = ERR_PTR(-ENOMEM);
-		goto err;
-	}
-	path.mnt = mntget(anon_inode_mnt);
-	d_instantiate(path.dentry, inode);
-
-	file = alloc_file(&path, OPEN_FMODE(flags), fops);
-	if (IS_ERR(file)) {
-		dput(path.dentry);
-		mntput(path.mnt);
-		goto err;
-	}
-
-	file->f_mapping = inode->i_mapping;
-	file->f_flags = flags & (O_ACCMODE | O_NONBLOCK);
-	file->private_data = priv;
-	return file;
-
-err:
-	module_put(fops->owner);
-	return file;
-}
-#endif
 #else
 struct file *ksu_anon_inode_create_getfile_compat(
 	const char *name, const struct file_operations *fops, void *priv,
