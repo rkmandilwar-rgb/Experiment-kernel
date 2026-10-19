@@ -4477,7 +4477,14 @@ int fts_chip_powercycle(struct fts_ts_info *info)
 	else
 		msleep(300);
 
-	if (info->pwr_reg) {
+	/*
+	 * Bring the rails up in the same order as fts_enable_reg(): the
+	 * bus/AVDD rail first, then the panel/DVDD rail.  The conditions
+	 * used to be swapped with respect to the regulators they enable,
+	 * so a panel that only had one of the two rails described in DT
+	 * never got powered again after a power cycle.
+	 */
+	if (info->bus_reg) {
 		error = regulator_enable(info->bus_reg);
 		if (error < 0) {
 			logError(1, "%s %s: Failed to enable AVDD regulator\n",
@@ -4485,7 +4492,7 @@ int fts_chip_powercycle(struct fts_ts_info *info)
 		}
 	}
 
-	if (info->bus_reg) {
+	if (info->pwr_reg) {
 		error = regulator_enable(info->pwr_reg);
 		if (error < 0) {
 			logError(1, "%s %s: Failed to enable DVDD regulator\n",
@@ -4541,7 +4548,14 @@ int fts_chip_powercycle2(struct fts_ts_info *info, unsigned long sleep)
 		gpio_set_value(info->bdata->reset_gpio, 0);
 
 	msleep(sleep);
-	if (info->pwr_reg) {
+	/*
+	 * Bring the rails up in the same order as fts_enable_reg(): the
+	 * bus/AVDD rail first, then the panel/DVDD rail.  The conditions
+	 * used to be swapped with respect to the regulators they enable,
+	 * so a panel that only had one of the two rails described in DT
+	 * never got powered again after a power cycle.
+	 */
+	if (info->bus_reg) {
 		error = regulator_enable(info->bus_reg);
 		if (error < 0) {
 			logError(1, "%s %s: Failed to enable AVDD regulator\n",
@@ -4549,7 +4563,7 @@ int fts_chip_powercycle2(struct fts_ts_info *info, unsigned long sleep)
 		}
 	}
 
-	if (info->bus_reg) {
+	if (info->pwr_reg) {
 		error = regulator_enable(info->pwr_reg);
 		if (error < 0) {
 			logError(1, "%s %s: Failed to enable DVDD regulator\n",
