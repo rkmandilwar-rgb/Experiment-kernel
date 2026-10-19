@@ -65,8 +65,9 @@ for f in "${frags[@]}"; do
                 sed -i "s|^CONFIG_${sym}=.*|# CONFIG_${sym} is not set|" "$out"
                 # Only append when the symbol is not mentioned at all yet -
                 # an anchored match, so "CONFIG_FOO" is not considered
-                # present just because "CONFIG_FOOBAR" exists.
-                if ! grep -qE "^# ${sym} is not set\$" "$out"; then
+                # present just because "CONFIG_FOOBAR" exists.  ${sym} is the
+                # bare name here, so the CONFIG_ prefix has to be put back.
+                if ! grep -qE "^# CONFIG_${sym} is not set\$" "$out"; then
                     echo "$line" >> "$out"
                 fi
                 count=$((count + 1))
