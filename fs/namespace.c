@@ -3907,6 +3907,13 @@ struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *vfsmnt)
 	if (!mnt->mnt.mnt_root || IS_ERR(mnt->mnt.mnt_root)) {
 		mntput(&mnt->mnt);
 		unlock_mount_hash();
+		/*
+		 * Keep the "returns a new reference" contract of this helper:
+		 * every caller unconditionally dput()/mntput()s the result, so
+		 * hand back the original mount with a reference of our own.
+		 */
+		mntget(vfsmnt);
+		dget(vfsmnt->mnt_root);
 		return vfsmnt;
 	}
 	dget(mnt->mnt.mnt_root);

@@ -74,8 +74,12 @@ static int seq_show(struct seq_file *m, void *v)
 			unsigned long ino = inode->i_ino;
 
 			susfs_sus_kstat_spoof_proc_fd_seq_show(&mnt_id, &ino, inode->i_sb->s_dev);
-			seq_printf(m, "pos:\t%lli\nflags:\t0%o\nmnt_id:\t%i\nino:\t%lu\n",
-				   (long long)file->f_pos, f_flags, mnt_id, ino);
+			/*
+			 * Keep the exact 4.14 fdinfo shape (no "ino" line): a
+			 * different layout for hidden files would stand out.
+			 */
+			seq_printf(m, "pos:\t%lli\nflags:\t0%o\nmnt_id:\t%i\n",
+				   (long long)file->f_pos, f_flags, mnt_id);
 			goto susfs_spoofed;
 		}
 	}
@@ -93,10 +97,9 @@ static int seq_show(struct seq_file *m, void *v)
 
 				if (!IS_ERR(dpath) && !kern_path(dpath, 0, &path)) {
 					if (path.dentry->d_inode) {
-						seq_printf(m, "pos:\t%lli\nflags:\t0%o\nmnt_id:\t%i\nino:\t%lu\n",
+						seq_printf(m, "pos:\t%lli\nflags:\t0%o\nmnt_id:\t%i\n",
 							   (long long)file->f_pos, f_flags,
-							   susfs_get_non_sus_mnt_id_from_mnt(mnt),
-							   path.dentry->d_inode->i_ino);
+							   susfs_get_non_sus_mnt_id_from_mnt(mnt));
 						path_put(&path);
 						kfree(pathname);
 						goto susfs_spoofed;

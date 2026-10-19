@@ -917,12 +917,21 @@ out_copy_to_user:
 	}
 }
 
-void susfs_spoof_cmdline_or_bootconfig(struct seq_file *m) {
+int susfs_spoof_cmdline_or_bootconfig(struct seq_file *m) {
 	unsigned seq;
-	char *buf = (char *)kmalloc(SUSFS_FAKE_CMDLINE_OR_BOOTCONFIG_SIZE, GFP_KERNEL);
+	char *buf;
 
+	/*
+	 * /proc/cmdline is world-readable and is read long before the susfs
+	 * daemon installs a fake cmdline: without this guard the NULL
+	 * fake_cmdline_or_bootconfig would be dereferenced (oops).
+	 */
+	if (!static_key_enabled(&susfs_is_fake_cmdline_or_bootconfig_buffer_set))
+		return -EINVAL;
+
+	buf = (char *)kmalloc(SUSFS_FAKE_CMDLINE_OR_BOOTCONFIG_SIZE, GFP_KERNEL);
 	if (!buf) {
-		return;
+		return -ENOMEM;
 	}
 	do {
 		seq = read_seqbegin(&susfs_fake_cmdline_or_bootconfig_seqlock);
@@ -930,6 +939,7 @@ void susfs_spoof_cmdline_or_bootconfig(struct seq_file *m) {
 	} while (read_seqretry(&susfs_fake_cmdline_or_bootconfig_seqlock, seq));
 	seq_puts(m, buf);
 	kfree(buf);
+	return 0;
 }
 #endif
 

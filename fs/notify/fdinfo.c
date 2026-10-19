@@ -30,14 +30,15 @@ extern void susfs_sus_kstat_spoof_inotify_fdinfo(unsigned long *out_target_ino, 
 
 static void show_fdinfo(struct seq_file *m, struct file *f,
 			void (*show)(struct seq_file *m,
-				     struct fsnotify_mark *mark))
+				     struct fsnotify_mark *mark,
+				     struct file *file))
 {
 	struct fsnotify_group *group = f->private_data;
 	struct fsnotify_mark *mark;
 
 	mutex_lock(&group->mark_mutex);
 	list_for_each_entry(mark, &group->marks_list, g_list) {
-		show(m, mark);
+		show(m, mark, f);
 		if (seq_has_overflowed(m))
 			break;
 	}
@@ -79,7 +80,8 @@ static void show_mark_fhandle(struct seq_file *m, struct inode *inode)
 
 #ifdef CONFIG_INOTIFY_USER
 
-static void inotify_fdinfo(struct seq_file *m, struct fsnotify_mark *mark)
+static void inotify_fdinfo(struct seq_file *m, struct fsnotify_mark *mark,
+			   struct file *file)
 {
 	struct inotify_inode_mark *inode_mark;
 	struct inode *inode;
@@ -102,10 +104,50 @@ static void inotify_fdinfo(struct seq_file *m, struct fsnotify_mark *mark)
 				seq_printf(m, "inotify wd:%x ino:%lx sdev:%x mask:%x ignored_mask:0 ",
 					   inode_mark->wd, ino, dev,
 					   inotify_mark_user_mask(mark));
-				show_mark_fhandle(m, inode);
+				/*
+				 * No show_mark_fhandle() here: the exportfs file handle
+				 * encodes the real i_ino/igen of the very inode we are
+				 * trying to hide (and FUSE may not even support fh).
+				 */
 				seq_putc(m, '\n');
 				iput(inode);
 				return;
+			}
+		}
+#endif
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+		/*
+		 * Mark lives on a mount the caller must not know about: report
+		 * the inode of the path as seen through the real mount instead.
+		 */
+		if (likely(susfs_is_current_proc_umounted())) {
+			struct mount *mnt = real_mount(file->f_path.mnt);
+
+			if (mnt->mnt_id >= DEFAULT_KSU_MNT_ID) {
+				struct path path;
+				char *pathname = kmalloc(PAGE_SIZE, GFP_KERNEL);
+
+				if (pathname) {
+					char *dpath = d_path(&file->f_path, pathname, PAGE_SIZE);
+
+					if (!IS_ERR(dpath) && !kern_path(dpath, 0, &path)) {
+						struct inode *real = d_backing_inode(path.dentry);
+
+						if (real) {
+							seq_printf(m, "inotify wd:%x ino:%lx sdev:%x mask:%x ignored_mask:0 ",
+								   inode_mark->wd, real->i_ino, real->i_sb->s_dev,
+								   inotify_mark_user_mask(mark));
+							show_mark_fhandle(m, real);
+							seq_putc(m, '\n');
+							path_put(&path);
+							kfree(pathname);
+							iput(inode);
+							return;
+						}
+						path_put(&path);
+					}
+					kfree(pathname);
+				}
 			}
 		}
 #endif
@@ -127,10 +169,13 @@ void inotify_show_fdinfo(struct seq_file *m, struct file *f)
 
 #ifdef CONFIG_FANOTIFY
 
-static void fanotify_fdinfo(struct seq_file *m, struct fsnotify_mark *mark)
+static void fanotify_fdinfo(struct seq_file *m, struct fsnotify_mark *mark,
+			    struct file *file)
 {
 	unsigned int mflags = 0;
 	struct inode *inode;
+
+	(void)file;
 
 	if (mark->flags & FSNOTIFY_MARK_FLAG_IGNORED_SURV_MODIFY)
 		mflags |= FAN_MARK_IGNORED_SURV_MODIFY;
