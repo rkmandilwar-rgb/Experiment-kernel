@@ -34,7 +34,14 @@ static struct workqueue_struct *cpu_boost_wq;
 
 static struct work_struct input_boost_work;
 
-static bool input_boost_enabled = true;
+/*
+ * Conservative default: no input boost at all.  The touch stack works fine
+ * without it and forcing every CPU to 1.4 GHz on each tap is a measurable
+ * battery drain.  Userspace can opt in at runtime by writing a frequency
+ * (or a "cpu:freq" list) to
+ * /sys/module/cpu_boost/parameters/input_boost_freq.
+ */
+static bool input_boost_enabled;
 
 static unsigned int input_boost_ms = 40;
 module_param(input_boost_ms, uint, 0644);
@@ -326,12 +333,27 @@ static int cpu_boost_init(void)
 	for_each_possible_cpu(cpu) {
 		s = &per_cpu(sync_info, cpu);
 		s->cpu = cpu;
-		/* Default input boost: 1.4 GHz on all cores */
-		s->input_boost_freq = 1401600;
+		/*
+		 * No default boost frequency: input_boost_freq stays 0 (and
+		 * input_boost_enabled false) until userspace asks for a boost.
+		 */
 	}
-	cpufreq_register_notifier(&boost_adjust_nb, CPUFREQ_POLICY_NOTIFIER);
+
+	ret = cpufreq_register_notifier(&boost_adjust_nb, CPUFREQ_POLICY_NOTIFIER);
+	if (ret)
+		goto err_wq;
 
 	ret = input_register_handler(&cpuboost_input_handler);
+	if (ret)
+		goto err_notifier;
+
 	return 0;
+
+err_notifier:
+	cpufreq_unregister_notifier(&boost_adjust_nb, CPUFREQ_POLICY_NOTIFIER);
+err_wq:
+	destroy_workqueue(cpu_boost_wq);
+	cpu_boost_wq = NULL;
+	return ret;
 }
 late_initcall(cpu_boost_init);
