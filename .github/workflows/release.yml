@@ -1,0 +1,147 @@
+name: Publish pre-release
+
+# Manual-only.  The build pipeline (build.yml) still refuses to publish
+# anything and keeps its release job permanently disabled; this workflow
+# exists so one already-built artifact can be turned into a pre-release on
+# explicit request, together with the matching KernelSU-Next manager.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Build run ID to publish (e.g. 39244749721)"
+        required: true
+        type: string
+      tag:
+        description: "Release tag (e.g. stormbreaker-168)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    name: Publish pre-release
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Resolve build
+        id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_id="${{ inputs.run_id }}"
+          sha=$(gh api "repos/${{ github.repository }}/actions/runs/${run_id}" --jq .head_sha)
+          artifact=$(gh api \
+            "repos/${{ github.repository }}/actions/runs/${run_id}/artifacts" \
+            --jq '.artifacts[0].name')
+          build=$(printf '%s' "$artifact" | sed -n 's/.*-\([0-9]\+\)$/\1/p')
+          test -n "$sha"
+          test -n "$artifact"
+          test -n "$build"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "resolved ${artifact} at ${sha}"
+
+      - name: Download kernel artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh run download "${{ inputs.run_id }}" \
+            -R "${{ github.repository }}" \
+            -n "${{ steps.meta.outputs.artifact }}" \
+            -D dist
+          ls -l dist
+
+      - name: Download matching KernelSU-Next manager
+        run: |
+          set -euo pipefail
+          # v3.4.2 / versionCode 33355 is what this kernel reports.
+          curl -fL --retry 3 --retry-delay 5 \
+            -o dist/KernelSU_Next_v3.4.2_33355-release.apk \
+            "https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/KernelSU_Next_v3.4.2_33355-release.apk"
+          test -s dist/KernelSU_Next_v3.4.2_33355-release.apk
+
+      - name: Publish pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ steps.meta.outputs.sha }}
+          BUILD: ${{ steps.meta.outputs.build }}
+        run: |
+          set -euo pipefail
+          zipf=$(ls dist/Stormbreaker-miatoll-*.zip)
+          apk=dist/KernelSU_Next_v3.4.2_33355-release.apk
+          krel=$(grep -h '^kernel.release=' dist/build-info.txt 2>/dev/null | cut -d= -f2 || true)
+          [ -n "$krel" ] || krel="4.14.357-openela"
+
+          cat > notes.md <<EOF
+          # Stormbreaker Kernel — miatoll
+
+          **Pre-release — build ${BUILD} · \`${krel}\` · commit \`${SHA}\`**
+          **Device:** Xiaomi Miatoll (Curtana / Gram / Joyeuse / Excalibur) — SM6250 (Atoll), non-GKI
+
+          > **This kernel has not been booted on a device.** It is published as a
+          > pre-release for testing only. Keep a bootable backup and a way to
+          > restore your boot partition before flashing.
+
+          ## Contents
+
+          | File | What it is |
+          |---|---|
+          | \`$(basename "$zipf")\` | AnyKernel3 flashable zip — \`Image.gz\` + \`dtbo.img\` + base DTB, no modules |
+          | \`$(basename "$apk")\` | KernelSU-Next manager v3.4.2, versionCode **33355** — matches the kernel |
+
+          ## Flashing
+
+          1. Boot TWRP (or any recovery that handles AnyKernel3).
+          2. Flash \`$(basename "$zipf")\`.
+          3. Reboot, then install the manager APK if it is not already present.
+
+          ## KernelSU
+
+          - KernelSU-Next **legacy v3.4.2**, versionCode **33355**, built in
+            (\`CONFIG_KSU=y\`, manual hooks).
+          - The manager APK is the upstream v3.4.2 build for this exact version
+            code; it is included only so the pair can be flashed from one place.
+          - Kernel-side source: \`KernelSU-Next/\` in this repository.
+
+          ## What changed since the last build
+
+          - fd wrapper (\`KSU_CMD_GET_WRAPPER_FD\`): private anon inode on 4.14
+            instead of the shared global \`anon_inode_inode\`, and a real
+            \`alloc_file_pseudo()\` backport so the wrapper matches upstream's
+            \`<5.16\` code instead of a hand-rolled sequence.
+          - SUSFS 2.3.0 and NoMount v21 audit fixes: NUL-terminated pathname
+            input, deferred \`dput()/path_put()\`, \`S_PRIVATE\` restore after a
+            failed \`mmap\`, NUL-safe ioctl replies, no per-lookup log spam.
+          - Thermal rework, conservative touch boost, WALT-first scheduling.
+          - Full history: \`git log\` on \`arena/53729e17-experiment-kernel\`.
+
+          ## Checksums
+
+          \`\`\`
+          $(cd dist && sha256sum "$(basename "$zipf")" "$(basename "$apk")")
+          \`\`\`
+          EOF
+
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::release $TAG already exists"
+            exit 1
+          fi
+
+          gh release create "$TAG" \
+            -R "$GITHUB_REPOSITORY" \
+            --target "$SHA" \
+            --title "Stormbreaker Kernel miatoll — build ${BUILD} (pre-release)" \
+            --notes-file notes.md \
+            --prerelease \
+            "$zipf" "$apk"
+
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" \
+            --json url,isPrerelease,tagName,assets \
+            --jq '{url, tagName, isPrerelease, assets: [.assets[] | {name, size}]}'
