@@ -1,0 +1,15 @@
+# Release request — read by .github/workflows/release.yml.
+#
+# A push that changes this file (and only such a push) asks the publisher to
+# turn an already-finished build into a pre-release.  Update both keys, commit,
+# push, and the workflow resolves the run, downloads the kernel artifact,
+# attaches the matching KernelSU-Next manager and creates the tag itself.
+#
+#   run_id : the Actions run that produced the artifact (from `gh run list`)
+#   tag    : stormbreaker-<build number>; must match the artifact's build
+#
+# Nothing is published unless a tag is requested here, and the publisher
+# refuses to touch a tag that already exists.
+
+run_id=39244749721
+tag=stormbreaker-168

@@ -1,83 +1,157 @@
+# Stormbreaker — publish a pre-release from an already-finished build run.
+#
+# build.yml keeps its release job disabled (`if: false`) on purpose, so
+# publishing is a separate, explicit step that never happens during a build.
+# This workflow picks up a finished kernel artifact, adds the matching
+# KernelSU-Next manager and creates a pre-release that points at the commit
+# that was actually built.
+#
+# Start it by pushing a change to `.github/release-request` (it holds
+# `run_id=` and `tag=`).  A push that does not touch that file never starts
+# this workflow, and `workflow_dispatch` is kept for when a token with
+# Actions: write is available.
+#
+# Nothing here runs for ordinary source pushes.
+
 name: Publish pre-release
 
-# Manual-only.  The build pipeline (build.yml) still refuses to publish
-# anything and keeps its release job permanently disabled; this workflow
-# exists so one already-built artifact can be turned into a pre-release on
-# explicit request, together with the matching KernelSU-Next manager.
 on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: "Build run ID to publish (e.g. 39244749721)"
+        description: 'Build run ID to publish (for example 39244749721)'
         required: true
         type: string
       tag:
-        description: "Release tag (e.g. stormbreaker-168)"
+        description: 'Release tag (for example stormbreaker-168)'
         required: true
         type: string
+  push:
+    paths:
+      - '.github/release-request'
 
 permissions:
   contents: write
   actions: read
 
+concurrency:
+  group: publish-prerelease
+  cancel-in-progress: false
+
 jobs:
   publish:
     name: Publish pre-release
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
     steps:
-      - name: Resolve build
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read the release request
+        id: req
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_RUN_ID: ${{ inputs.run_id }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            run_id="$INPUT_RUN_ID"
+            tag="$INPUT_TAG"
+          else
+            run_id=$(sed -n 's/^run_id=//p' .github/release-request | head -n1)
+            tag=$(sed -n 's/^tag=//p' .github/release-request | head -n1)
+          fi
+          case "$run_id" in
+            ''|*[!0-9]*) echo "::error::bad run_id '$run_id'"; exit 1 ;;
+          esac
+          case "$tag" in
+            stormbreaker-*) ;;
+            *) echo "::error::bad tag '$tag' (expected stormbreaker-<build>)"; exit 1 ;;
+          esac
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "request: run ${run_id} -> ${tag}"
+
+      - name: Resolve the build behind that run
         id: meta
         env:
           GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.req.outputs.run_id }}
+          TAG: ${{ steps.req.outputs.tag }}
         run: |
           set -euo pipefail
-          run_id="${{ inputs.run_id }}"
-          sha=$(gh api "repos/${{ github.repository }}/actions/runs/${run_id}" --jq .head_sha)
-          artifact=$(gh api \
-            "repos/${{ github.repository }}/actions/runs/${run_id}/artifacts" \
+          api="repos/${{ github.repository }}"
+
+          sha=$(gh api "${api}/actions/runs/${RUN_ID}" --jq .head_sha)
+          artifact=$(gh api "${api}/actions/runs/${RUN_ID}/artifacts" \
             --jq '.artifacts[0].name')
-          build=$(printf '%s' "$artifact" | sed -n 's/.*-\([0-9]\+\)$/\1/p')
-          test -n "$sha"
-          test -n "$artifact"
-          test -n "$build"
+          # artifact names look like "miatoll-kernel-168"
+          build=$(printf '%s' "$artifact" | sed -n 's/.*-\([0-9][0-9]*\)$/\1/p')
+
+          test -n "$sha" || { echo "::error::could not resolve head_sha"; exit 1; }
+          test -n "$artifact" || { echo "::error::no artifact on run ${RUN_ID}"; exit 1; }
+          test -n "$build" || { echo "::error::cannot read a build number from '${artifact}'"; exit 1; }
+          test "stormbreaker-${build}" = "$TAG" || {
+            echo "::error::${TAG} does not match ${artifact} (expected stormbreaker-${build})"
+            exit 1
+          }
+
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
           echo "build=$build" >> "$GITHUB_OUTPUT"
           echo "resolved ${artifact} at ${sha}"
 
-      - name: Download kernel artifact
+      - name: Download the kernel artifact
         env:
           GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.req.outputs.run_id }}
+          ARTIFACT: ${{ steps.meta.outputs.artifact }}
         run: |
           set -euo pipefail
           mkdir -p dist
-          gh run download "${{ inputs.run_id }}" \
+          gh run download "$RUN_ID" \
             -R "${{ github.repository }}" \
-            -n "${{ steps.meta.outputs.artifact }}" \
+            -n "$ARTIFACT" \
             -D dist
-          ls -l dist
+          find dist -maxdepth 2 -type f | sort
 
-      - name: Download matching KernelSU-Next manager
+      - name: Download the matching KernelSU-Next manager
         run: |
           set -euo pipefail
-          # v3.4.2 / versionCode 33355 is what this kernel reports.
+          # KernelSU-Next legacy v3.4.2, versionCode 33355 - the manager
+          # version this kernel's driver reports.
           curl -fL --retry 3 --retry-delay 5 \
             -o dist/KernelSU_Next_v3.4.2_33355-release.apk \
             "https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/KernelSU_Next_v3.4.2_33355-release.apk"
           test -s dist/KernelSU_Next_v3.4.2_33355-release.apk
 
-      - name: Publish pre-release
+      - name: Publish the pre-release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.req.outputs.tag }}
           SHA: ${{ steps.meta.outputs.sha }}
           BUILD: ${{ steps.meta.outputs.build }}
         run: |
           set -euo pipefail
-          zipf=$(ls dist/Stormbreaker-miatoll-*.zip)
-          apk=dist/KernelSU_Next_v3.4.2_33355-release.apk
-          krel=$(grep -h '^kernel.release=' dist/build-info.txt 2>/dev/null | cut -d= -f2 || true)
+
+          zipf=$(find dist -name 'Stormbreaker-miatoll-*.zip' -print -quit)
+          apk=$(find dist -name 'KernelSU_Next_*-release.apk' -print -quit)
+          info=$(find dist -name 'build-info.txt' -print -quit)
+          test -n "$zipf" || { echo "::error::no kernel zip in the artifact"; exit 1; }
+          test -n "$apk"  || { echo "::error::no manager apk downloaded"; exit 1; }
+
+          krel=""
+          if [ -n "$info" ]; then
+            krel=$(sed -n 's/^kernel\.release=//p' "$info" | head -n1)
+          fi
           [ -n "$krel" ] || krel="4.14.357-openela"
+
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::release $TAG already exists"
+            exit 1
+          fi
 
           cat > notes.md <<EOF
           # Stormbreaker Kernel — miatoll
@@ -128,11 +202,6 @@ jobs:
           $(cd dist && sha256sum "$(basename "$zipf")" "$(basename "$apk")")
           \`\`\`
           EOF
-
-          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "::error::release $TAG already exists"
-            exit 1
-          fi
 
           gh release create "$TAG" \
             -R "$GITHUB_REPOSITORY" \
