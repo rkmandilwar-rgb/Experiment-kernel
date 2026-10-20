@@ -2161,6 +2161,13 @@ static int show_numa_map(struct seq_file *m, void *v, int is_pid)
 	if (!mm)
 		return 0;
 
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+	/* Parity with show_map_vma()/show_smap(): SUS_MAP mappings must not
+	 * leak their real path through /proc/<pid>/numa_maps either. */
+	if (file && SUSFS_IS_INODE_SUS_MAP(file_inode(file)))
+		return 0;
+#endif
+
 	/* Ensure we start with an empty set of numa_maps statistics. */
 	memset(md, 0, sizeof(*md));
 
@@ -2176,7 +2183,27 @@ static int show_numa_map(struct seq_file *m, void *v, int is_pid)
 
 	if (file) {
 		seq_puts(m, " file=");
+#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
+		if (SUSFS_IS_INODE_OPEN_REDIRECT(file_inode(file))) {
+			char *spoofed_redirected_name = NULL;
+			unsigned long r_ino = 0;
+			dev_t r_dev = 0;
+			int srcu_idx = srcu_read_lock(&susfs_srcu_open_redirect);
+
+			if (!susfs_open_redirect_spoof_show_map_vma_srcu(
+					file_inode(file), &r_ino, &r_dev,
+					&spoofed_redirected_name) &&
+			    spoofed_redirected_name)
+				seq_puts(m, spoofed_redirected_name);
+			else
+				seq_file_path(m, file, "\n\t= ");
+			srcu_read_unlock(&susfs_srcu_open_redirect, srcu_idx);
+		} else {
+			seq_file_path(m, file, "\n\t= ");
+		}
+#else
 		seq_file_path(m, file, "\n\t= ");
+#endif
 	} else if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
 		seq_puts(m, " heap");
 	} else if (is_stack(vma)) {
