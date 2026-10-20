@@ -123,15 +123,18 @@ static bool nm_resolve_rule(struct nomount_dir_node *dir_node, const char *name,
 static void nm_dir_rcu_free(struct rcu_head *head)
 {
     struct nomount_dir_node *dir = container_of(head, struct nomount_dir_node, rcu);
-    if (dir->pinned_dentry) dput(dir->pinned_dentry);
     kfree(rcu_dereference_raw(dir->children));
     kfree(dir);
 }
 
 static void nm_dir_put(struct nomount_dir_node *dir_node)
 {
-    if (dir_node && atomic_dec_and_test(&dir_node->refs))
+    if (dir_node && atomic_dec_and_test(&dir_node->refs)) {
+        /* dput may sleep; never do it from the RCU callback */
+        struct dentry *pinned = xchg(&dir_node->pinned_dentry, NULL);
+        if (pinned) dput(pinned);
         call_rcu(&dir_node->rcu, nm_dir_rcu_free);
+    }
 }
 
 static inline void nm_destroy_virtual_inode(struct inode *inode)
@@ -590,6 +593,8 @@ static int nm_getattr(IDMAP_ARG const struct path *path, struct kstat *stat, u32
 #else
         generic_fillattr(IDMAP_CALL v_inode, stat);
 #endif
+    else if (!d_backing_inode(info->r_path.dentry))
+        res = -ENOENT;
     else
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0)
         res = vfs_getattr_nosec(&info->r_path, stat);
@@ -616,6 +621,7 @@ static int nm_setattr(IDMAP_ARG struct dentry *dentry, struct iattr *attr)
     if (!info->r_path.dentry) return 0;
 
     r_inode = d_backing_inode(info->r_path.dentry);
+    if (unlikely(!r_inode)) return -ENOENT;
     inode_lock(r_inode);
     err = notify_change(IDMAP_CALL info->r_path.dentry, attr, NULL);
     inode_unlock(r_inode);
@@ -702,6 +708,8 @@ static struct dentry *nm_dir_lookup(struct inode *dir, struct dentry *dentry, un
         goto negative_dentry;
 
     struct inode *r_dir = d_backing_inode(info->r_path.dentry);
+    if (!r_dir)
+        goto negative_dentry;
     if (r_dir->i_op->lookup) {
         res = r_dir->i_op->lookup(r_dir, dentry, flags);
         if (!IS_ERR(res ? res : dentry)) nomount_hijack_dentry_ops(dir, res ? res : dentry, false);
@@ -725,8 +733,10 @@ static int nm_xattr_get(const struct xattr_handler *handler, struct dentry *dent
     struct nm_xattr_proxy *proxy = container_of(handler, struct nm_xattr_proxy, fake);
     if (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops) {
         struct nm_inode_info *info = inode->i_private;
+        struct inode *r_inode;
         if (unlikely(!info || !info->r_path.dentry)) return -ENODATA;
-        return __vfs_getxattr(info->r_path.dentry, d_inode(info->r_path.dentry), xattr_full_name(handler, name), buffer, size FLAGS_VAL);
+        if (unlikely(!(r_inode = d_inode(info->r_path.dentry)))) return -ENODATA;
+        return __vfs_getxattr(info->r_path.dentry, r_inode, xattr_full_name(handler, name), buffer, size FLAGS_VAL);
     }
 
     return proxy->orig->get(proxy->orig, dentry, inode, name, buffer, size FLAGS_VAL);
@@ -739,8 +749,10 @@ static int nm_xattr__get(const struct xattr_handler *handler, struct dentry *den
     struct nm_xattr_proxy *proxy = container_of(handler, struct nm_xattr_proxy, fake);
     if (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops) {
         struct nm_inode_info *info = inode->i_private;
+        struct inode *r_inode;
         if (unlikely(!info || !info->r_path.dentry)) return -ENODATA;
-        return __vfs_getxattr(info->r_path.dentry, d_inode(info->r_path.dentry), xattr_full_name(handler, name), buffer, size);
+        if (unlikely(!(r_inode = d_inode(info->r_path.dentry)))) return -ENODATA;
+        return __vfs_getxattr(info->r_path.dentry, r_inode, xattr_full_name(handler, name), buffer, size);
     }
 
     if (proxy->orig->__get)
@@ -754,8 +766,10 @@ static int nm_xattr_set(const struct xattr_handler *handler, IDMAP_ARG struct de
     struct nm_xattr_proxy *proxy = container_of(handler, struct nm_xattr_proxy, fake);
     if (inode->i_op == &nm_file_iops || inode->i_op == &nm_dir_iops) {
         struct nm_inode_info *info = inode->i_private;
+        struct inode *r_inode;
         if (unlikely(!info || !info->r_path.dentry)) return -ENODATA;
-        return __vfs_setxattr(IDMAP_PATH(info->r_path) info->r_path.dentry, d_inode(info->r_path.dentry), xattr_full_name(handler, name), buffer, size, flags);
+        if (unlikely(!(r_inode = d_inode(info->r_path.dentry)))) return -ENODATA;
+        return __vfs_setxattr(IDMAP_PATH(info->r_path) info->r_path.dentry, r_inode, xattr_full_name(handler, name), buffer, size, flags);
     }
     return proxy->orig->set(proxy->orig, IDMAP_CALL dentry, inode, name, buffer, size, flags);
 }
@@ -948,7 +962,9 @@ static inline int nomount_hijack_superblock(struct super_block *sb)
 
 static inline int nomount_hijack_dir_ops(struct nomount_dir_node *dir_node, struct inode *inode)
 {
-    const struct inode_operations *iop = smp_load_acquire(&inode->i_op);
+    const struct inode_operations *iop;
+    if (!inode) return -ENOENT;
+    iop = smp_load_acquire(&inode->i_op);
     const struct file_operations *fop = smp_load_acquire(&inode->i_fop);
     struct nm_dir_ops *ops;
     int err;
@@ -1090,10 +1106,9 @@ static void nm_publish_child_view(struct nomount_dir_node *dir_node, struct nomo
 {
     struct nomount_child_array *old = rcu_dereference_protected(dir_node->children, lockdep_is_held(&nomount_mutex));
     rcu_assign_pointer(dir_node->children, children);
-    if (!children && dir_node->pinned_dentry) {
-        struct dentry *pinned = dir_node->pinned_dentry;
-        dir_node->pinned_dentry = NULL;
-        dput(pinned);
+    if (!children) {
+        struct dentry *pinned = xchg(&dir_node->pinned_dentry, NULL);
+        if (pinned) dput(pinned);
     }
     if (old) kfree_rcu(old, rcu);
 }

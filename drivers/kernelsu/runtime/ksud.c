@@ -167,6 +167,9 @@ static void load_module_rc_once(void)
 		pr_warn("module rc: skip empty module rc\n");
 		goto out_close_file;
 	}
+	// enforce the documented MODULE_RC_MAX cap on the load path too
+	if (fsize > MODULE_RC_MAX)
+		fsize = MODULE_RC_MAX;
 
 	module_rc_buf = kvmalloc(fsize, GFP_KERNEL);
 	if (!module_rc_buf) {
