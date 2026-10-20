@@ -219,7 +219,9 @@ static noinline uintptr_t kallsyms_lookup_hashed_name(const char *name)
 			goto found;
 	}
 
+#ifdef CONFIG_KSU_DEBUG
 	pr_info("%s: not found: %s hash: 0x%llx\n", __func__, name, input_hash);
+#endif
 	return 0x0;
 
 found:
@@ -229,12 +231,16 @@ found:
 	if (unlikely(!strstarts(symbol_buf, name)))
 		goto collision_found;
 
+#ifdef CONFIG_KSU_DEBUG
 	pr_info("%s: %s hash: 0x%llx at 0x%lx\n", __func__, symbol_buf, input_hash, entries[i].addr);
+#endif
 	return entries[i].addr;
 
 collision_found:
 	// this is unlikely, but hell yeah lets log it if it happens
+#ifdef CONFIG_KSU_DEBUG
 	pr_info("%s: chibihash64 collision! name: %s symbol_buf: %s hash: 0x%llx\n", __func__, name, symbol_buf, input_hash);
+#endif
 	return 0x0;
 }
 
@@ -305,7 +311,9 @@ fn_ok:;
 
 	int ret = kallsyms_on_each_symbol_fn(kallsyms_on_each_symbol_cb, &args);
 	if (ret && args.target_addr)
+#ifdef CONFIG_KSU_DEBUG
 		pr_info("kallsyms_on_each_symbol: success! %s at 0x%lx\n", name, args.target_addr);
+#endif
 
 	return args.target_addr;
 }
@@ -320,7 +328,9 @@ static uintptr_t kp_kallsyms_lookup_name(const char *name)
 	uintptr_t addr = (uintptr_t)kp.addr;
 	unregister_kprobe(&kp);
 
+#ifdef CONFIG_KSU_DEBUG
 	pr_info("%s: success! %s at 0x%lx\n", __func__, name, addr);
+#endif
 	return addr;
 }
 #endif
@@ -364,7 +374,9 @@ static noinline uintptr_t kallsyms_lookup_retry(const char *name)
 found:;
 	char namebuf[KSYM_NAME_LEN];
 	sprint_symbol_no_offset(namebuf, addr);
+#ifdef CONFIG_KSU_DEBUG
 	pr_info("%s: %s addr: 0x%lx \n", __func__, namebuf, addr);
+#endif
 	return addr;
 }
 
@@ -458,7 +470,9 @@ static noinline void dotted_kallsyms_destroy_hash_array(void)
 	if (!kallsyms_hash_array)
 		return;
 
+#ifdef CONFIG_KSU_DEBUG
 	pr_info("%s: addr: 0x%lx entries: %u capacity: %u\n", __func__, (uintptr_t)kallsyms_hash_array, kallsyms_hash_array_entry_count, kallsyms_hash_array_capacity);
+#endif
 
 	memzero_explicit(kallsyms_hash_array, kallsyms_hash_array_entry_count * sizeof(struct symbol_hash_entry));
 
