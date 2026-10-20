@@ -1698,17 +1698,30 @@ retry:
 	if (unlikely(!dentry))
 		return ERR_PTR(-ENOMEM);
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	/* Check AFTER lookup_real(): the pre-lookup dentry is always
+	 * negative, so testing it here made the whole hide dead code and
+	 * hidden names leaked existence (EEXIST) via create-family lookups.
+	 */
+	dentry = lookup_real(base->d_inode, dentry, flags);
 	if (unlikely(dentry) && !IS_ERR(dentry) && dentry->d_inode && !found_sus_path && susfs_is_inode_sus_path(dentry->d_inode)) {
 		if (d_in_lookup(dentry))
 			d_lookup_done(dentry);
 		if (!(flags & LOOKUP_RCU))
 			dput(dentry);
+		/* Never let the fake qstr be created on disk: the retried
+		 * negative dentry would otherwise turn into a real "..5.u.S"
+		 * file through LOOKUP_CREATE/O_CREAT flows. Upstream only
+		 * guarded FUSE here; guard every filesystem. */
+		if (flags & (LOOKUP_CREATE | LOOKUP_EXCL))
+			return ERR_PTR(-EACCES);
 		dentry = d_alloc(base, &susfs_fake_qstr_name);
 		found_sus_path = true;
 		goto retry;
 	}
-#endif
+	return dentry;
+#else
 	return lookup_real(base->d_inode, dentry, flags);
+#endif
 }
 
 
@@ -3393,6 +3406,11 @@ static int lookup_open(struct nameidata *nd, struct path *path,
 		if (d_in_lookup(dentry))
 			d_lookup_done(dentry);
 		dput(dentry);
+		/* Creating (or O_EXCL probing) must not fall through to the
+		 * fake-qstr retry: O_CREAT would create a real "..5.u.S"
+		 * file next to the hidden one. */
+		if (open_flag & (O_CREAT | O_EXCL))
+			return -EACCES;
 		dentry = NULL;
 		found_sus_path = true;
 	}
@@ -3486,6 +3504,20 @@ no_open:
 			dentry = res;
 		}
 	}
+
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	/* The d_lookup() above only catches cached hidden dentries; on a
+	 * cache miss the fs lookup just instantiated the real hidden one.
+	 * Hide it here (mirrors lookup_slow) before the O_CREAT branch can
+	 * create on it and before do_last can open it. */
+	if (is_nd_state_open_last && dentry && !IS_ERR(dentry) && dentry->d_inode &&
+	    susfs_is_inode_sus_path(dentry->d_inode)) {
+		if (d_in_lookup(dentry))
+			d_lookup_done(dentry);
+		dput(dentry);
+		return (open_flag & (O_CREAT | O_EXCL)) ? -EACCES : -ENOENT;
+	}
+#endif
 
 	/* Negative dentry, just create the file */
 	if (!dentry->d_inode && (open_flag & O_CREAT)) {
