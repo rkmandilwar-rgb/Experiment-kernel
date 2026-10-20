@@ -74,12 +74,23 @@ static int statfs_by_dentry(struct dentry *dentry, struct kstatfs *buf)
 extern bool susfs_is_inode_sus_kstat(struct inode *inode, bool *out_is_fuse);
 extern int susfs_sus_kstat_spoof_vfs_statfs(struct inode *inode, struct kstatfs *buf, bool *is_fuse);
 
+/* - Exposed for fs/susfs.c so the captured spoofed_kstatfs carries proper
+ *   f_flags (ST_VALID | mount/sb flags). statfs_by_dentry() alone never fills
+ *   f_flags on 4.14; upstream fix 60024a4c/"f_flags left zeroed on the
+ *   SUS_KSTAT statfs path" (wrapper added in 357d43f1).
+ */
+int susfs_calculate_f_flags(struct vfsmount *mnt)
+{
+	return calculate_f_flags(mnt);
+}
+
 /* - Like statfs_by_dentry(), but if the inode is flagged SUS_KSTAT we copy the
  *   pre-computed spoofed kstatfs of the underlying (non-sus) mount instead of
  *   calling the real ->statfs(). OPEN_REDIRECT no longer spoofs statfs itself;
  *   redirected paths that must stay hidden should also be added to SUS_KSTAT.
  */
-static int susfs_statfs_by_dentry(struct dentry *dentry, struct kstatfs *buf, bool *is_fuse)
+static int susfs_statfs_by_dentry(struct dentry *dentry, struct vfsmount *mnt,
+				 struct kstatfs *buf, bool *is_fuse)
 {
 	int retval;
 
@@ -90,12 +101,20 @@ static int susfs_statfs_by_dentry(struct dentry *dentry, struct kstatfs *buf, bo
 	retval = security_sb_statfs(dentry);
 	if (retval)
 		return retval;
-	if (!susfs_sus_kstat_spoof_vfs_statfs(d_backing_inode(dentry), buf, is_fuse))
-		goto bypass_orig_flow;
+	if (!susfs_sus_kstat_spoof_vfs_statfs(d_backing_inode(dentry), buf, is_fuse)) {
+		/* spoofed_kstatfs already carries f_flags; never recalculate
+		 * it from the real mount here or the real flags leak (upstream
+		 * fix 6c2b5042/769e31fbe). */
+		if (buf->f_frsize == 0)
+			buf->f_frsize = buf->f_bsize;
+		return retval;
+	}
 	retval = dentry->d_sb->s_op->statfs(dentry, buf);
-bypass_orig_flow:
-	if (retval == 0 && buf->f_frsize == 0)
-		buf->f_frsize = buf->f_bsize;
+	if (retval == 0) {
+		buf->f_flags = calculate_f_flags(mnt);
+		if (buf->f_frsize == 0)
+			buf->f_frsize = buf->f_bsize;
+	}
 	return retval;
 }
 #endif // #ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
@@ -114,9 +133,11 @@ int vfs_statfs(const struct path *path, struct kstatfs *buf)
 		bool is_fuse = false;
 		if (susfs_is_inode_sus_kstat(inode, &is_fuse)) {
 			/* buf->f_flags arrives already spoofed inside the copied
-			 * kstatfs; recalculating it from the real mount would leak
-			 * the real mount's flags (upstream fix 769e31fbe). */
-			return susfs_statfs_by_dentry(path->dentry, buf, &is_fuse);
+			 * kstatfs (captured via susfs_calculate_f_flags() on the
+			 * non-sus mount); recalculating it from the real mount
+			 * would leak the real mount's flags (upstream 769e31fbe). */
+			return susfs_statfs_by_dentry(path->dentry, path->mnt,
+						      buf, &is_fuse);
 		}
 	}
 #endif // #ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
