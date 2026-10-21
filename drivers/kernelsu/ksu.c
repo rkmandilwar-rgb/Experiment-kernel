@@ -66,6 +66,8 @@
 #include "feature/shell_su_adb_only.h"
 #include "feature/sucompat.h"
 #include "feature/sulog.h"
+#include "preinit/preinit.h"
+#include "runtime/ksud_boot.h"
 #include "runtime/ksud.h"
 #include "sulog/event.h"
 #include "sulog/fd.h"
@@ -124,13 +126,19 @@
 #include "feature/module_blacklist.c"
 #endif
 
+#ifndef KSU_NO_PREINIT
+#include "preinit/runner/runner_xxd.h"
+#include "preinit/preinit.c"
+#endif
+
 #include "feature/adb_root.c"
 #include "feature/kernel_umount.c"
 #include "feature/selinux_hide.c"
 #include "feature/shell_su_adb_only.c"
 #include "feature/sucompat.c"
 #include "feature/sulog.c"
-#include "runtime/ksud.c"
+#include "runtime/boot_event.c"
+#include "runtime/ksud_integration.c"
 
 #include "sulog/event.c"
 #include "sulog/fd.c"
@@ -262,16 +270,14 @@ static int __init kernelsu_init(void)
 	ksu_feature_init();
 	ksu_sucompat_init();
 	ksu_kernel_umount_init();
+#ifdef CONFIG_KSU_FEATURE_SULOG	
+	ksu_sulog_init();
+#endif
+#ifdef CONFIG_KSU_FEATURE_ADBROOT
+	ksu_adb_root_init();
+#endif
 	ksu_selinux_hide_init();
 	ksu_shell_su_adb_only_init();
-
-#ifdef CONFIG_KSU_FEATURE_SULOG	
-	ksu_sulog_init(); // so the feature is registered
-#endif
-
-#ifdef CONFIG_KSU_FEATURE_ADBROOT
-	ksu_adb_root_init(); // so the feature is registered
-#endif
 
 	ksu_core_init();
 #ifdef CONFIG_KSU_SUSFS
@@ -287,6 +293,7 @@ static int __init kernelsu_init(void)
 	ksu_throne_tracker_init();
 	ksu_ksud_init();
 	ksu_file_wrapper_init();
+	ksu_preinit_init();
 
 #ifdef CONFIG_KSU_TAMPER_SYSCALL_TABLE
 	ksu_syscall_table_hook_init();

@@ -11,8 +11,10 @@ MDIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 $(info -- KDIR: $(KDIR))
 $(info -- MDIR: $(MDIR))
 
-# compliant to last upstream kernel change as of 96770df
-CFLAGS_ksu.o += -DKSU_VERSION=32693
+# compliant to last upstream kernel change as of 469c428
+CFLAGS_ksu.o += -DKSU_VERSION=32700
+# Local quirk (INTERNAL.md): preinit (#3397) stays not implemented on 4.14.
+CFLAGS_ksu.o += -DKSU_NO_PREINIT
 
 KSU_PACKAGE_NAME := me.weishu.kernelsu
 KSU_EXPECTED_SIZE := 0x033b

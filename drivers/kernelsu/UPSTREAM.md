@@ -3,8 +3,8 @@
 This directory vendors the kernel component from:
 
 - Repository: https://github.com/backslashxx/KernelSU
-- Release/tag: `v3.3.1-13` (kernel driver `KSU_VERSION=32693`, **UAPI v6**)
-- Matching Manager release asset: `KernelSU_v3.3.1-13_32693-release.apk`
+- Release/tag: `v3.3.1-21` (kernel driver `KSU_VERSION=32700`, **UAPI v6**)
+- Matching Manager release asset: `KernelSU_v3.3.1-21_32701-release.apk`
 - The upstream `kernel/` subtree is imported, with only the local SUSFS v2.3.0
   glue documented below reapplied.
 - The driver exposes KernelSU UAPI v6, which the matching Manager requires
@@ -52,6 +52,23 @@ are retained across the `v3.3.1` refresh:
   `ksu_module_mounted = true` on `EVENT_MODULE_MOUNTED`.
 
 ## Sync history
+
+- 2026-10-21: refreshed the vendored driver to backslashxx/KernelSU
+  `v3.3.1-21` (`KSU_VERSION=32700`, UAPI v6) and reapplied the local SUSFS
+  glue. Matching Manager is `KernelSU_v3.3.1-21_32701-release.apk`
+  (version code 32701). Driver delta vs v3.3.1-13: `ksud` split into
+  `runtime/ksud_integration.c` + `runtime/boot_event.c` (+ `ksud_boot.h`),
+  `ksu_file_sid` moved to `selinux.h`, adb_root calls became no-op macro
+  stubs, execve paths gained preinit hook points, branch-link hook helpers
+  refactored to generic macros, `get_info` reports `KSU_GET_INFO_FLAG_PREINIT`,
+  `module_rc_len` capped at `MODULE_RC_MAX` upstream (the read-path `fsize`
+  clamp stays a local fix), and the late-load LKM escape is `#if 0` upstream
+  now. Local quirks kept: preinit stays NOT IMPLEMENTED via
+  `-DKSU_NO_PREINIT` in the Makefile (upstream would auto-enable it through
+  `KSU_CAN_USE_JUMP_LABEL` on arm64), plus the usual fortify/`assume()`/
+  `__builtin_memcpy`/4.14 syscall-wrapper build fixes. Note: upstream deleted
+  the v3.3.1-13 release/tag after shipping v3.3.1-21, so release jobs must
+  pin the new tag.
 
 - 2026-10-18: refreshed the vendored driver to backslashxx/KernelSU
   `v3.3.1-13` (`KSU_VERSION=32693`, **UAPI v6** — kernel and Manager must
