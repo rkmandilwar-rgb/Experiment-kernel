@@ -711,6 +711,7 @@ jobs:
 
           ## What's new
 
+          - Android 17 readiness: BINDER_GET_EXTENDED_ERROR binder ioctl (extended error reporting) and ext4 /data encryption (FBE/FBEv2) restored — cross-validated against nine A17-capable 4.14 kernels
           - Simple LMK replaces the userspace memory killer (kernel-side, upstream design)
               - reclaim target scales per device: 176 MiB (4 GB) / 245 MiB (6 GB) / 320 MiB (8 GB)
               - 100 ms victim-reap timeout, vmpressure trigger at >= 98
