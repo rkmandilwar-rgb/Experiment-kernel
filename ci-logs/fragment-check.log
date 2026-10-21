@@ -1,4 +1,6 @@
 Checking 17 fragment(s) against out/.config
 
+NOT-SET   CONFIG_BPF_EVENTS=y  (from kernel/configs/miatoll/ebpf.config: effective value is 'ABSENT')
+NOT-SET   CONFIG_TRACEPOINTS=y  (from kernel/configs/miatoll/ebpf.config: effective value is 'ABSENT')
 
-checked 522 options, 0 missing symbol(s), 0 ineffective option(s)
+checked 520 options, 0 missing symbol(s), 2 ineffective option(s)
