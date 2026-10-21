@@ -1,10 +1,14 @@
-# Stormbreaker — publish a pre-release from an already-finished build run.
+# Stormbreaker — publish or refresh a pre-release from a finished build run.
 #
 # build.yml keeps its release job disabled (`if: false`) on purpose, so
 # publishing is a separate, explicit step that never happens during a build.
 # This workflow picks up a finished kernel artifact, adds the matching
-# KernelSU-Next manager and creates a pre-release that points at the commit
-# that was actually built.
+# KernelSU-Next manager and either
+#
+#   - creates a pre-release for a new tag, or
+#   - refreshes an existing pre-release in place (same tag, same release
+#     page): the old kernel zip is replaced and the title/notes are rewritten,
+#     nothing else is created.
 #
 # Start it by pushing a change to `.github/release-request` (it holds
 # `run_id=` and `tag=`).  A push that does not touch that file never starts
@@ -19,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: 'Build run ID to publish (for example 39244749721)'
+        description: 'Build run ID to publish (for example 39568246521)'
         required: true
         type: string
       tag:
@@ -85,22 +89,32 @@ jobs:
           api="repos/${{ github.repository }}"
 
           sha=$(gh api "${api}/actions/runs/${RUN_ID}" --jq .head_sha)
+          # artifact names look like "miatoll-kernel-175"
           artifact=$(gh api "${api}/actions/runs/${RUN_ID}/artifacts" \
             --jq '.artifacts[0].name')
-          # artifact names look like "miatoll-kernel-168"
           build=$(printf '%s' "$artifact" | sed -n 's/.*-\([0-9][0-9]*\)$/\1/p')
 
           test -n "$sha" || { echo "::error::could not resolve head_sha"; exit 1; }
           test -n "$artifact" || { echo "::error::no artifact on run ${RUN_ID}"; exit 1; }
           test -n "$build" || { echo "::error::cannot read a build number from '${artifact}'"; exit 1; }
-          test "stormbreaker-${build}" = "$TAG" || {
-            echo "::error::${TAG} does not match ${artifact} (expected stormbreaker-${build})"
-            exit 1
-          }
+
+          exists=false
+          if gh release view "$TAG" -R "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            exists=true
+            echo "release ${TAG} exists: refreshing it in place"
+          else
+            # A brand new tag has to match the build it is created for.
+            test "stormbreaker-${build}" = "$TAG" || {
+              echo "::error::${TAG} does not match ${artifact} (expected stormbreaker-${build})"
+              exit 1
+            }
+            echo "release ${TAG} does not exist: creating it"
+          fi
 
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
           echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "exists=$exists" >> "$GITHUB_OUTPUT"
           echo "resolved ${artifact} at ${sha}"
 
       - name: Download the kernel artifact
@@ -133,6 +147,7 @@ jobs:
           TAG: ${{ steps.req.outputs.tag }}
           SHA: ${{ steps.meta.outputs.sha }}
           BUILD: ${{ steps.meta.outputs.build }}
+          EXISTS: ${{ steps.meta.outputs.exists }}
         run: |
           set -euo pipefail
 
@@ -147,11 +162,6 @@ jobs:
             krel=$(sed -n 's/^kernel\.release=//p' "$info" | head -n1)
           fi
           [ -n "$krel" ] || krel="4.14.357-openela"
-
-          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "::error::release $TAG already exists"
-            exit 1
-          fi
 
           cat > notes.md <<EOF
           # Stormbreaker Kernel — miatoll
@@ -186,13 +196,25 @@ jobs:
 
           ## What changed since the last build
 
+          - SELinux hide / AVC spoofing audit: fops hooks are installed under a
+            lock (a double patch could recurse into itself), the access reply is
+            only rewritten for hidden queries, the fake status page is published
+            with cmpxchg, and the AVC log spoof no longer rewrites the shared
+            audit record.
+          - SUSFS audit: \`clone_mnt()\` no longer inherits the fake-mnt-id tag
+            (it leaked an ida slot per clone), the sdcard monitor drops its key
+            on failure, the sus-path loop de-duplicates, readlink replies are
+            terminated, the fake-name lookup cannot livelock, and getdents no
+            longer does an inode lookup per entry for non-hidden processes.
+          - NoMount audit: negative-dentry guard and payload flag validation.
           - fd wrapper (\`KSU_CMD_GET_WRAPPER_FD\`): private anon inode on 4.14
             instead of the shared global \`anon_inode_inode\`, and a real
             \`alloc_file_pseudo()\` backport so the wrapper matches upstream's
             \`<5.16\` code instead of a hand-rolled sequence.
-          - SUSFS 2.3.0 and NoMount v21 audit fixes: NUL-terminated pathname
-            input, deferred \`dput()/path_put()\`, \`S_PRIVATE\` restore after a
-            failed \`mmap\`, NUL-safe ioctl replies, no per-lookup log spam.
+          - SUSFS 2.3.0 and NoMount v21 earlier audit fixes: NUL-terminated
+            pathname input, deferred \`dput()/path_put()\`, \`S_PRIVATE\` restore
+            after a failed \`mmap\`, NUL-safe ioctl replies, no per-lookup log
+            spam.
           - Thermal rework, conservative touch boost, WALT-first scheduling.
           - Full history: \`git log\` on \`arena/53729e17-experiment-kernel\`.
 
@@ -203,13 +225,39 @@ jobs:
           \`\`\`
           EOF
 
-          gh release create "$TAG" \
-            -R "$GITHUB_REPOSITORY" \
-            --target "$SHA" \
-            --title "Stormbreaker Kernel miatoll — build ${BUILD} (pre-release)" \
-            --notes-file notes.md \
-            --prerelease \
-            "$zipf" "$apk"
+          if [ "$EXISTS" = "true" ]; then
+            # Refresh in place: same release, same tag.  Replace the kernel zip
+            # (its file name carries the build number, so --clobber alone would
+            # leave the previous one behind) and keep a single manager apk.
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
+              --jq '.assets[].name' | while read -r name; do
+              case "$name" in
+                Stormbreaker-miatoll-*.zip)
+                  if [ "$name" != "$(basename "$zipf")" ]; then
+                    echo "removing stale asset ${name}"
+                    gh release delete-asset "$TAG" "$name" -R "$GITHUB_REPOSITORY" --yes
+                  fi
+                  ;;
+              esac
+            done
+            gh release upload "$TAG" \
+              -R "$GITHUB_REPOSITORY" \
+              --clobber \
+              "$zipf" "$apk"
+            gh release edit "$TAG" \
+              -R "$GITHUB_REPOSITORY" \
+              --title "Stormbreaker Kernel miatoll — build ${BUILD} (pre-release)" \
+              --notes-file notes.md \
+              --prerelease
+          else
+            gh release create "$TAG" \
+              -R "$GITHUB_REPOSITORY" \
+              --target "$SHA" \
+              --title "Stormbreaker Kernel miatoll — build ${BUILD} (pre-release)" \
+              --notes-file notes.md \
+              --prerelease \
+              "$zipf" "$apk"
+          fi
 
           gh release view "$TAG" -R "$GITHUB_REPOSITORY" \
             --json url,isPrerelease,tagName,assets \
