@@ -2,13 +2,17 @@
 # Non-GKI kernel v4.14.357 for Curtana / Gram / Joyeuse / Excalibur (SM6250/Atoll)
 #
 # Toolchain: pinned AOSP Clang r596125, fully LLVM (LLVM=1, LLVM_IAS=1,
-# ld.lld).  Polly needs a toolchain that actually ships the pass, so the
-# build uses the AOSP clang bundle instead of apt.llvm.org (whose packages
-# do not include Polly) — the "Verify toolchain" step runs a Polly sanity
-# check and fails early if the compiler cannot accept -mllvm -polly.
+# ld.lld).  Polly needs a toolchain that actually ships the pass, so the build
+# uses the AOSP clang bundle instead of apt.llvm.org (whose packages do not
+# include it) — the "Verify toolchain" step fails early if the compiler cannot
+# accept -mllvm -polly.
 #
-# Codegen: CONFIG_LLVM_POLLY + CONFIG_LTO_CLANG/THINLTO (--lto-O3 at link)
-# + CONFIG_INLINE_OPTIMIZATION (see kernel/configs/miatoll/compiler.config).
+# Codegen: CONFIG_LTO_CLANG + CONFIG_THINLTO + CONFIG_LLVM_POLLY + inlining.
+# This is deliberately unchanged from build 183.  The A17 kernel that boots on
+# this exact device (kinesis @ kinesis-v29) uses the same three options, so
+# codegen is not the boot-logo suspect.  Build 184 instead drops the tracing
+# pack (dynamic ftrace + kprobes), which no other miatoll kernel enables and
+# which rewrites kernel text before init runs.
 #
 # Feature/tuning packs (kernel/configs/miatoll/*.config, merged by
 # scripts/merge-defconfig.sh): eBPF, NTFS(+ntfs3), EROFS, BBRv1 + BBRplus,
@@ -360,12 +364,21 @@ jobs:
           require 'CONFIG_LTO_CLANG=y'
           require 'CONFIG_THINLTO=y'
           require 'CONFIG_INLINE_OPTIMIZATION=y'
-          grep -q -- '-mllvm -polly' Makefile \
-            || { echo "::error::Polly build flags missing from Makefile"; exit 1; }
           grep -q 'config LLVM_POLLY' arch/Kconfig \
             || { echo "::error::LLVM_POLLY Kconfig option missing"; exit 1; }
           grep -q 'config INLINE_OPTIMIZATION' init/Kconfig \
             || { echo "::error::INLINE_OPTIMIZATION Kconfig option missing"; exit 1; }
+
+          # Tracing/probe pack: OFF for build 184. Dynamic ftrace rewrites
+          # kernel text in ftrace_init() before init runs, and no other
+          # miatoll kernel (kinesis A17, crDroid sm6250, LineageOS sm6250)
+          # enables it. Kprobes/uprobes go with it.
+          require_off 'CONFIG_FUNCTION_TRACER'
+          require_off 'CONFIG_FUNCTION_GRAPH_TRACER'
+          require_off 'CONFIG_DYNAMIC_FTRACE'
+          require_off 'CONFIG_FTRACE_SYSCALLS'
+          require_off 'CONFIG_KPROBES'
+          require_off 'CONFIG_UPROBES'
 
           # Kinesis ports: uname spoof, BPF helper, CASS, TEO, LZ4KD, ramdisk
           require 'CONFIG_FAKE_UNAME_5_10=y'
@@ -841,7 +854,7 @@ jobs:
 
           ### eBPF (extended Berkeley Packet Filter)
           - \`BPF_SYSCALL=y\` — BPF syscall + arm64 JIT (\`BPF_JIT_ALWAYS_ON\`)
-          - cgroup-bpf, kprobe / uprobe / tracepoint attach types
+          - cgroup-bpf and perf attach types (dynamic ftrace / kprobes off)
           - cls_bpf, act_bpf, lwtunnel BPF, \`NETFILTER_XT_MATCH_BPF\`
           - BPF stream parser (sockmap / sk_msg), BPF events
 
