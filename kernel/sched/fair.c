@@ -6812,11 +6812,12 @@ boosted_task_util(struct task_struct *task)
 
 #ifdef CONFIG_UCLAMP_TASK
 	/*
-	 * Both controllers are live in this kernel: schedtune's margin is
-	 * applied first (it is what /dev/stune/*/schedtune.boost feeds), and
-	 * the utilization clamp is applied on top of the result. Until
-	 * userspace touches any uclamp knob the static key is off, so this is
-	 * a no-op and schedtune behaviour is bit-for-bit what it was.
+	 * Both controllers are live in this kernel: the schedtune margin is
+	 * applied first (it is what the per-cgroup schedtune.boost files under
+	 * /dev/stune feed), and the utilization clamp is applied on top of the
+	 * result. Until userspace touches any uclamp knob the static key is
+	 * off, so this is a no-op and schedtune behaviour is bit-for-bit what
+	 * it was.
 	 */
 	if (uclamp_is_used())
 		util = clamp(util,

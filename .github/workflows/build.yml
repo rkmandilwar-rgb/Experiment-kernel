@@ -794,8 +794,16 @@ jobs:
           } > ci-logs/RUN.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # publish only the logs, never code
-          git add -f ci-logs/build.log ci-logs/build-errors.txt ci-logs/fragment-check.log ci-logs/out.config ci-logs/RUN.txt 2>/dev/null || true
+          # Publish only the logs, never code.  Each file is forced in
+          # separately: a single `git add -f` with one missing pathspec
+          # aborts the whole invocation, and build.log is matched by the
+          # unanchored `build.log` rule in .gitignore, so without -f it is
+          # silently dropped and the failure has no readable log.
+          for f in ci-logs/build.log ci-logs/build-errors.txt \
+                   ci-logs/fragment-check.log ci-logs/out/.config \
+                   ci-logs/RUN.txt; do
+            if [ -f "$f" ]; then git add -f "$f"; fi
+          done
           git add -A ci-logs
           if git diff --cached --quiet; then
             echo "no log files to publish"
