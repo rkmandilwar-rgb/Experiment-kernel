@@ -37,6 +37,12 @@ on:
     branches:
       - a
       - 'arena/**'
+    # The publisher's request file and the CI log drop are not kernel
+    # source: changing them must not spend a build.  Anything else,
+    # including this file, still builds.
+    paths-ignore:
+      - '.github/release-request'
+      - 'ci-logs/**'
 
 permissions:
   contents: read
