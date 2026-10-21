@@ -662,11 +662,20 @@ jobs:
           cp "${kernel_zips[0]}" "release-payload/${kernel_zip}"
 
           # Match the in-kernel KernelSU v3.3.1-21 driver (version 32700).
+          # backslashxx/KernelSU has removed the v3.3.1-21 release and its
+          # assets, so fall back to the APK mirrored on our stormbreaker-182
+          # release (same signed asset uploaded during build 182).
           manager_apk='KernelSU_v3.3.1-21_32701-release.apk'
-          gh release download 'v3.3.1-21' \
-            --repo backslashxx/KernelSU \
-            --pattern "$manager_apk" \
-            --dir release-payload
+          if ! gh release download 'v3.3.1-21' \
+               --repo backslashxx/KernelSU \
+               --pattern "$manager_apk" \
+               --dir release-payload; then
+            rm -f "release-payload/${manager_apk}"
+            gh release download 'stormbreaker-182' \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern "$manager_apk" \
+              --dir release-payload
+          fi
 
           python3 - <<'PY'
           from pathlib import Path
