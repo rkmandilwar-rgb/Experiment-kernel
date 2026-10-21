@@ -46,6 +46,7 @@ frags=(
     kernel/configs/miatoll/kernelsu.config
     kernel/configs/miatoll/susfs.config
     kernel/configs/miatoll/nomount.config
+    kernel/configs/miatoll/a17.config
 )
 
 echo "merge-defconfig.sh"

@@ -88,3 +88,19 @@ config PROC_UID
 	depends on PROC_FS && RT_MUTEXES
 	help
 	Provides aggregated per-uid information under /proc/uid.
+
+config PROC_CMDLINE_APPEND_ANDROID_FORCE_NORMAL_BOOT
+	bool "Append androidboot.force_normal_boot=1 if skip_initramfs is present"
+	default n
+	depends on PROC_FS
+	help
+	  If skip_initramfs is present in the kernel command line, append
+	  androidboot.force_normal_boot=1 to the string presented in
+	  /proc/cmdline.
+
+	  Android 10 and later two-stage init takes its normal-boot path from
+	  androidboot.force_normal_boot, which bootloaders that were built for
+	  an older Android release never pass.  This is the kernel-side
+	  workaround, and it is a no-op when skip_initramfs is absent.
+
+	  If unsure say N.

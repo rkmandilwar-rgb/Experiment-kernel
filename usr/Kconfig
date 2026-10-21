@@ -32,6 +32,23 @@ config INITRAMFS_FORCE
 	  and is useful if you cannot or don't want to change the image
 	  your bootloader passes to the kernel.
 
+config INITRAMFS_IGNORE_SKIP_FLAG
+	bool "Force initramfs even when skip_initramfs is set"
+	default n
+	help
+	  Ignore the skip_initramfs flag on the kernel command line.
+
+	  Some bootloaders pass skip_initramfs on every normal boot even
+	  though the initramfs in the boot image carries first-stage init
+	  (and, on rooted devices, the ramdisk patches).  Saying Y here
+	  keeps the initramfs contents reachable and presents the flag to
+	  userspace as "want_initramfs".
+
+	  This should only be used if you have no control over the cmdline
+	  passed by your bootloader and cannot use CMDLINE_FORCE.
+
+	  If unsure say N.
+
 config INITRAMFS_ROOT_UID
 	int "User ID to map to 0 (user root)"
 	depends on INITRAMFS_SOURCE!=""
