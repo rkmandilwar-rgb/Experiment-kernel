@@ -356,7 +356,7 @@ static __nocfi ssize_t ksu_sel_write(struct file *file, const char __user *ubuf,
          * untouched -- there is nothing to disguise in it.
          */
         if (deny)
-            ksu_fix_access_response(file->private_data, true);
+            ksu_fix_access_response(file->private_data);
     }
 
     return ret;
