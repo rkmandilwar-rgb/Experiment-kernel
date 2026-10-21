@@ -1,6 +1,4 @@
 Checking 18 fragment(s) against out/.config
 
-OVERRID   CONFIG_EROFS_FS_PCPU_KTHREAD  (from kernel/configs/miatoll/erofs.config: fragment asks for 'not set', config has '=y')
-OVERRID   CONFIG_EROFS_FS_PCPU_KTHREAD_HIPRI  (from kernel/configs/miatoll/erofs.config: fragment asks for 'not set', config has '=y')
 
-checked 522 options, 0 missing symbol(s), 2 ineffective option(s)
+checked 523 options, 0 missing symbol(s), 0 ineffective option(s)
