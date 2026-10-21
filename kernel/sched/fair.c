@@ -6808,7 +6808,23 @@ boosted_task_util(struct task_struct *task)
 
 	trace_sched_boost_task(task, util, margin);
 
-	return util + margin;
+	util = util + margin;
+
+#ifdef CONFIG_UCLAMP_TASK
+	/*
+	 * Both controllers are live in this kernel: schedtune's margin is
+	 * applied first (it is what /dev/stune/*/schedtune.boost feeds), and
+	 * the utilization clamp is applied on top of the result. Until
+	 * userspace touches any uclamp knob the static key is off, so this is
+	 * a no-op and schedtune behaviour is bit-for-bit what it was.
+	 */
+	if (uclamp_is_used())
+		util = clamp(util,
+			     uclamp_eff_value(task, UCLAMP_MIN),
+			     uclamp_eff_value(task, UCLAMP_MAX));
+#endif
+
+	return util;
 }
 
 static unsigned long cpu_util_without(int cpu, struct task_struct *p);
@@ -12739,6 +12755,10 @@ const struct sched_class fair_sched_class = {
 
 #ifdef CONFIG_SCHED_WALT
 	.fixup_walt_sched_stats	= walt_fixup_sched_stats_fair,
+#endif
+
+#ifdef CONFIG_UCLAMP_TASK
+	.uclamp_enabled		= 1,
 #endif
 };
 
