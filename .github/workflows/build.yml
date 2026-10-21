@@ -942,8 +942,10 @@ jobs:
           # 2. Reboot
           # \`\`\`
 
-          **Contents:** \`Image.gz\` + \`dtbo.img\` + base \`dtb\` for all four
-          miatoll variants. No kernel modules are shipped (\`do.modules=0\`).
+          **Contents:** \`Image.gz\` only. The zip replaces the kernel inside
+          the existing boot image and keeps that image's DTB; the dtbo
+          partition is never written. No kernel modules are shipped
+          (\`do.modules=0\`).
           EOF
 
           if gh release view "$TAG" >/dev/null 2>&1; then

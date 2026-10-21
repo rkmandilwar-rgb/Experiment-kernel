@@ -177,7 +177,7 @@ jobs:
 
           | File | What it is |
           |---|---|
-          | \`$(basename "$zipf")\` | AnyKernel3 flashable zip — \`Image.gz\` + \`dtbo.img\` + base DTB, no modules |
+          | \`$(basename "$zipf")\` | AnyKernel3 flashable zip — \`Image.gz\` only, no modules |
           | \`$(basename "$apk")\` | KernelSU-Next manager v3.4.2, versionCode **33355** — matches the kernel |
 
           ## Flashing
@@ -185,6 +185,23 @@ jobs:
           1. Boot TWRP (or any recovery that handles AnyKernel3).
           2. Flash \`$(basename "$zipf")\`.
           3. Reboot, then install the manager APK if it is not already present.
+
+          ### What the zip writes
+
+          Only the kernel image.  It repacks the boot image that is already on
+          the device with the new \`Image.gz\` and leaves everything else as it
+          found it:
+
+          - **DTB** — kept byte for byte from the existing boot image.
+          - **dtbo partition** — never written.
+          - ramdisk, cmdline, base address, page size — inherited unchanged.
+
+          So boot and dtbo can never end up carrying device trees from two
+          different builds, and the zip is equally valid over a stock ROM and
+          over a custom ROM.  The script backs the current boot image up to
+          \`/sdcard/Stormbreaker-backup-<timestamp>/boot.img\` before writing,
+          and refuses to touch anything if the boot image has no device tree
+          to keep.
 
           ## KernelSU
 
@@ -196,27 +213,32 @@ jobs:
 
           ## What changed since the last build
 
-          - SELinux hide / AVC spoofing audit: fops hooks are installed under a
-            lock (a double patch could recurse into itself), the access reply is
-            only rewritten for hidden queries, the fake status page is published
-            with cmpxchg, and the AVC log spoof no longer rewrites the shared
-            audit record.
-          - SUSFS audit: \`clone_mnt()\` no longer inherits the fake-mnt-id tag
-            (it leaked an ida slot per clone), the sdcard monitor drops its key
-            on failure, the sus-path loop de-duplicates, readlink replies are
-            terminated, the fake-name lookup cannot livelock, and getdents no
-            longer does an inode lookup per entry for non-hidden processes.
-          - NoMount audit: negative-dentry guard and payload flag validation.
-          - fd wrapper (\`KSU_CMD_GET_WRAPPER_FD\`): private anon inode on 4.14
-            instead of the shared global \`anon_inode_inode\`, and a real
-            \`alloc_file_pseudo()\` backport so the wrapper matches upstream's
-            \`<5.16\` code instead of a hand-rolled sequence.
-          - SUSFS 2.3.0 and NoMount v21 earlier audit fixes: NUL-terminated
-            pathname input, deferred \`dput()/path_put()\`, \`S_PRIVATE\` restore
-            after a failed \`mmap\`, NUL-safe ioctl replies, no per-lookup log
-            spam.
-          - Thermal rework, conservative touch boost, WALT-first scheduling.
-          - Full history: \`git log\` on \`arena/53729e17-experiment-kernel\`.
+          - **Installer rewritten to be kernel-only.** The zip no longer
+            carries a DTB or `dtbo.img`; it repacks boot with the new
+            `Image.gz` and keeps the device tree that is already there. The
+            script backs boot up first, verifies the copy against the
+            partition size, refuses to flash an image that is not gzip, and
+            aborts before writing anything if the boot image has no device
+            tree to preserve.
+          - **`uname` no longer returns empty strings.** The spoof buffer is
+            seeded from the real `utsname` at init and only substituted after
+            userspace pushes a value.
+          - `/proc/version`, `/proc/sys/kernel/osrelease` and
+            `/proc/sys/kernel/version` now report the same spoofed strings as
+            `uname(2)` instead of leaking the real release.
+          - `/proc/config.gz` removed (`CONFIG_IKCONFIG_PROC` off) — it was
+            world-readable and handed `CONFIG_KSU=y` to any app.
+          - SUSFS: fixed an inverted statfs branch that returned an
+            uninitialised value, the seqlock race in `susfs_set_uname()`, a
+            bounds-check ordering bug in the enabled-features reply, a raw
+            synthetic `mnt_id` in fdinfo, and an orphan smaps block for
+            SUS_MAP vmas.
+          - NoMount: fixed a double unlock of `nomount_mutex` on every rule
+            add error path.
+          - KernelSU: the SUSFS spawn path performs the same tracepoint and
+            seccomp setup as the plain path, and passes the real `old_uid` to
+            the umount handler.
+          - Full history: `git log` on `arena/53729e17-experiment-kernel`.
 
           ## Checksums
 

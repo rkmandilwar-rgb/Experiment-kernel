@@ -1,8 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 # scripts/package-anykernel3.sh
-# Package the AnyKernel3 flashable zip (Image.gz + base DTB) and the raw
-# images for the GitHub artifact.
+# Package the AnyKernel3 flashable zip (kernel image only) and the raw
+# image for the GitHub artifact.
 #
 # Run from the kernel source root after a successful build (out/ populated).
 set -euo pipefail
@@ -17,18 +17,19 @@ mkdir -p artifacts
 rsync -a --exclude='.gitignore' --exclude='placeholder' AnyKernel3/ "$AK3/"
 
 # Build products
+#
+# Only the kernel image is packaged.  AnyKernel3 falls back to the device
+# tree already inside the boot image when the zip carries no dtb (and to the
+# untouched dtbo partition when it carries no dtbo.img), which is exactly the
+# policy anykernel.sh documents: replace the kernel, keep the vendor's
+# hardware description.  Shipping a dtb here would override that and put
+# boot and dtbo device trees from different builds on the same device.
 cp out/arch/arm64/boot/Image.gz  "$AK3/"
-cp out/arch/arm64/boot/dtbo.img  "$AK3/"
-# DTB - AnyKernel3 expects a file named "dtb" (no extension) and uses it as
-# the base to merge the per-device overlays onto.  This is NOT optional: a zip
-# without it would flash a boot image with no device tree at all, so a missing
-# DTB is a hard error instead of a silent "|| true".
-DTB_SRC="out/arch/arm64/boot/dts/qcom/cust-atoll-ab.dtb"
-if [ ! -s "$DTB_SRC" ]; then
-  echo "FATAL: $DTB_SRC is missing; refusing to build a DTB-less zip" >&2
-  exit 1
+
+if [ -s out/arch/arm64/boot/dtbo.img ] ||
+   [ -s out/arch/arm64/boot/dts/qcom/cust-atoll-ab.dtb ]; then
+  echo "NOTE: DTB/DTBO were built but are intentionally NOT packaged (kernel-only zip)."
 fi
-cp "$DTB_SRC" "$AK3/dtb"
 
 # Kernel modules: NOT shipped, on purpose.
 #   * AnyKernel3/anykernel.sh sets do.modules=0,
@@ -54,16 +55,14 @@ ZIPFILE="Stormbreaker-miatoll-${TANGGAL}-build${RUN_NUM}.zip"
       -x '.git' -x 'README.md' -x '*placeholder'
 )
 
-# Raw images + metadata
+# Raw image + metadata (artifacts are for inspection, never flashed)
 cp out/arch/arm64/boot/Image.gz  artifacts/
-cp out/arch/arm64/boot/dtbo.img  artifacts/
-cp "$DTB_SRC"                    artifacts/dtb
 
 # SHA256
 (
   cd artifacts
-  sha256sum Image.gz dtbo.img dtb > SHA256SUMS
-  sha256sum "$ZIPFILE"           >> SHA256SUMS
+  sha256sum Image.gz > SHA256SUMS
+  sha256sum "$ZIPFILE" >> SHA256SUMS
 )
 
 # Provenance: this belongs next to the uploaded artifacts, not in the repo
