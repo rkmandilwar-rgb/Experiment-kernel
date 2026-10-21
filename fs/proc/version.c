@@ -5,13 +5,32 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/utsname.h>
+#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
+#include <linux/susfs_def.h>
+extern void susfs_spoof_uname(struct new_utsname *tmp);
+#endif
 
 static int version_proc_show(struct seq_file *m, void *v)
 {
+	struct new_utsname tmp;
+
+	down_read(&uts_sem);
+	memcpy(&tmp, utsname(), sizeof(tmp));
+	up_read(&uts_sem);
+
+#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
+	/*
+	 * /proc/version publishes the same release/version strings as
+	 * uname(2), through a path the syscall hook cannot see.  Apply the
+	 * substitution to a local copy so both views agree.
+	 */
+	susfs_spoof_uname(&tmp);
+#endif
+
 	seq_printf(m, linux_proc_banner,
-		utsname()->sysname,
-		utsname()->release,
-		utsname()->version);
+		tmp.sysname,
+		tmp.release,
+		tmp.version);
 	return 0;
 }
 

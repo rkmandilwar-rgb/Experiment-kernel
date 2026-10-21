@@ -817,6 +817,21 @@ static struct st_susfs_uname my_uname = {0};
 DEFINE_STATIC_KEY_FALSE(susfs_is_uname_spoof_buffer_set);
 static DEFINE_SEQLOCK(susfs_uname_seqlock);
 
+/*
+ * Seed the spoof buffer with the real strings.  Until userspace pushes a
+ * value the buffer has to keep describing this kernel: uname(2),
+ * /proc/version and /proc/sys/kernel/* all end up here, and an empty
+ * release/version is both a louder tell than the real string and a source
+ * of parse failures in userspace.
+ */
+static void susfs_my_uname_init(void)
+{
+	down_read(&uts_sem);
+	strscpy(my_uname.release, utsname()->release, sizeof(my_uname.release));
+	strscpy(my_uname.version, utsname()->version, sizeof(my_uname.version));
+	up_read(&uts_sem);
+}
+
 void susfs_set_uname(void __user **user_info) {
 	struct st_susfs_uname info = {0};
 	char log_release[__NEW_UTS_LEN + 1] = {0};
@@ -886,11 +901,51 @@ out_copy_to_user:
 void susfs_spoof_uname(struct new_utsname* tmp) {
 	unsigned seq;
 
+	/*
+	 * Only substitute once userspace has pushed a value: the static key is
+	 * raised by susfs_set_uname(), and until then the caller must keep the
+	 * value it already read from the namespace.
+	 */
+	if (!static_key_enabled(&susfs_is_uname_spoof_buffer_set))
+		return;
+
 	do {
 		seq = read_seqbegin(&susfs_uname_seqlock);
 		strscpy(tmp->release, my_uname.release, __NEW_UTS_LEN);
 		strscpy(tmp->version, my_uname.version, __NEW_UTS_LEN);
 	} while (read_seqretry(&susfs_uname_seqlock, seq));
+}
+
+/*
+ * Same substitution for the procfs files that print a single utsname field
+ * directly instead of going through uname(2): /proc/version and
+ * /proc/sys/kernel/{osrelease,version}.  They bypass the syscall hook, so
+ * without this they keep reporting the real release and give the spoof away.
+ * Returns true when a value was written.
+ */
+static bool susfs_get_spoofed_uts(bool version, char *buf, size_t len)
+{
+	unsigned seq;
+
+	if (!static_key_enabled(&susfs_is_uname_spoof_buffer_set))
+		return false;
+
+	do {
+		seq = read_seqbegin(&susfs_uname_seqlock);
+		strscpy(buf, version ? my_uname.version : my_uname.release, len);
+	} while (read_seqretry(&susfs_uname_seqlock, seq));
+
+	return true;
+}
+
+bool susfs_spoof_uts_release(char *buf, size_t len)
+{
+	return susfs_get_spoofed_uts(false, buf, len);
+}
+
+bool susfs_spoof_uts_version(char *buf, size_t len)
+{
+	return susfs_get_spoofed_uts(true, buf, len);
 }
 #endif // #ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
 
@@ -1756,6 +1811,9 @@ static void susfs_run_extra_works(struct work_struct *work) {
 /* susfs_init */
 void susfs_init(void) {
 	SUSFS_LOGI("Initializing susfs_extra_works\n");
+#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
+	susfs_my_uname_init();
+#endif
 	INIT_WORK(&susfs_extra_works, susfs_run_extra_works);
 	SUSFS_LOGI("susfs is initialized! version: " SUSFS_VERSION " \n");
 }

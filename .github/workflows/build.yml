@@ -313,6 +313,10 @@ jobs:
           # !SCHED_WALT): assert that we did NOT pretend otherwise.
           require_off 'CONFIG_CFS_BANDWIDTH'
 
+          # Stealth: /proc/config.gz is world-readable and would hand any app
+          # CONFIG_KSU / CONFIG_KSU_SUSFS / CONFIG_NOMOUNT verbatim.
+          require_off 'CONFIG_IKCONFIG_PROC'
+
           # NetHunter
           require 'CONFIG_USB_ACM=y'
           require 'CONFIG_USB_GADGET=y'

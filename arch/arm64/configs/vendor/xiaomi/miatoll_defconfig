@@ -126,7 +126,11 @@ CONFIG_RCU_FAST_NO_HZ=y
 CONFIG_RCU_NOCB_CPU=y
 CONFIG_BUILD_BIN2C=y
 CONFIG_IKCONFIG=y
-CONFIG_IKCONFIG_PROC=y
+# No /proc/config.gz: it is 0444, so any app can decompress it and read
+# CONFIG_KSU / CONFIG_KSU_SUSFS / CONFIG_NOMOUNT straight out of the running
+# kernel.  The blob stays embedded (IKCONFIG) for offline extract-ikconfig
+# but there is no userspace-readable path to it.
+# CONFIG_IKCONFIG_PROC is not set
 # CONFIG_IKHEADERS is not set
 CONFIG_LOG_BUF_SHIFT=20
 # CONFIG_CONSOLE_FLUSH_ON_HOTPLUG is not set

@@ -18,6 +18,11 @@
 
 #ifdef CONFIG_PROC_SYSCTL
 
+#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
+extern bool susfs_spoof_uts_release(char *buf, size_t len);
+extern bool susfs_spoof_uts_version(char *buf, size_t len);
+#endif
+
 static void *get_uts(struct ctl_table *table)
 {
 	char *which = table->data;
@@ -52,6 +57,20 @@ static int proc_do_uts_string(struct ctl_table *table, int write,
 	down_read(&uts_sem);
 	memcpy(tmp_data, get_uts(table), sizeof(tmp_data));
 	up_read(&uts_sem);
+#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
+	/*
+	 * /proc/sys/kernel/{osrelease,version} read a single namespace field
+	 * directly and never reach the uname(2) hook, so a spoofed release
+	 * would still be readable here.  Substitute the same strings for reads;
+	 * the write path below keeps operating on the real namespace.
+	 */
+	if (!write) {
+		if (table->data == (void *)init_uts_ns.name.release)
+			susfs_spoof_uts_release(tmp_data, sizeof(tmp_data));
+		else if (table->data == (void *)init_uts_ns.name.version)
+			susfs_spoof_uts_version(tmp_data, sizeof(tmp_data));
+	}
+#endif
 	r = proc_dostring(&uts_table, write, buffer, lenp, ppos);
 
 	if (write) {
