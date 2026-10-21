@@ -78,6 +78,9 @@ int vfs_getattr_nosec(const struct path *path, struct kstat *stat,
 		      u32 request_mask, unsigned int query_flags)
 {
 	struct inode *inode = d_backing_inode(path->dentry);
+#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+	u32 spoof_mask = 0;
+#endif
 
 	memset(stat, 0, sizeof(*stat));
 	stat->result_mask |= STATX_BASIC_STATS;
@@ -85,11 +88,18 @@ int vfs_getattr_nosec(const struct path *path, struct kstat *stat,
 	query_flags &= KSTAT_QUERY_FLAGS;
 
 #ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+	/*
+	 * Remember the decision in a local: a filesystem getattr() is free to
+	 * rewrite stat->result_mask, and losing the marker there would quietly
+	 * hand out the real inode numbers for that filesystem.
+	 */
 	if (susfs_is_current_app_uid()) {
 		bool is_fuse = false;
-		if (susfs_is_inode_sus_kstat(inode, &is_fuse))
-			stat->result_mask |= is_fuse ? STATX_SUS_KSTAT_FUSE
-						    : STATX_SUS_KSTAT;
+
+		if (susfs_is_inode_sus_kstat(inode, &is_fuse)) {
+			spoof_mask = is_fuse ? STATX_SUS_KSTAT_FUSE : STATX_SUS_KSTAT;
+			stat->result_mask |= spoof_mask;
+		}
 	}
 #endif
 
@@ -97,24 +107,16 @@ int vfs_getattr_nosec(const struct path *path, struct kstat *stat,
 		int err = inode->i_op->getattr(path, stat, request_mask,
 					       query_flags);
 #ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
-		if (!err && (stat->result_mask & STATX_SUS_KSTAT))
-			susfs_sus_kstat_spoof_generic_fillattr(inode, stat,
-					STATX_SUS_KSTAT);
-		else if (!err && (stat->result_mask & STATX_SUS_KSTAT_FUSE))
-			susfs_sus_kstat_spoof_generic_fillattr(inode, stat,
-					STATX_SUS_KSTAT_FUSE);
+		if (!err && spoof_mask)
+			susfs_sus_kstat_spoof_generic_fillattr(inode, stat, spoof_mask);
 #endif
 		return err;
 	}
 
 	generic_fillattr(inode, stat);
 #ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
-	if (stat->result_mask & STATX_SUS_KSTAT)
-		susfs_sus_kstat_spoof_generic_fillattr(inode, stat,
-				STATX_SUS_KSTAT);
-	else if (stat->result_mask & STATX_SUS_KSTAT_FUSE)
-		susfs_sus_kstat_spoof_generic_fillattr(inode, stat,
-				STATX_SUS_KSTAT_FUSE);
+	if (spoof_mask)
+		susfs_sus_kstat_spoof_generic_fillattr(inode, stat, spoof_mask);
 #endif
 	return 0;
 }

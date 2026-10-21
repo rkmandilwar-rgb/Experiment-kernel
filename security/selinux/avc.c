@@ -762,19 +762,27 @@ static void avc_audit_pre_callback(struct audit_buffer *ab, void *a)
 static void avc_audit_post_callback(struct audit_buffer *ab, void *a)
 {
 	struct common_audit_data *ad = a;
+	u32 tsid = ad->selinux_audit_data->tsid;
 	audit_log_format(ab, " ");
 #ifdef CONFIG_KSU_SUSFS
 	/*
 	 * When avc log spoofing is on, never let a ksu-domain target hit
 	 * the kernel log; report it as priv_app instead.
+	 *
+	 * Substitute a local copy instead of rewriting the audit data: the
+	 * same common_audit_data is shared with the per-LSM callbacks, and
+	 * writing into it would hand a bogus tsid to anything that looks at
+	 * the record afterwards.  Both SIDs come from a one-time lookup after
+	 * the policy is loaded, so a zero on either side means "not
+	 * resolved" and must not be used as a replacement value.
 	 */
 	if (static_key_enabled(&susfs_is_avc_log_spoofing_enabled) &&
-	    ad->selinux_audit_data->tsid == susfs_ksu_sid)
-		ad->selinux_audit_data->tsid = susfs_priv_app_sid;
+	    susfs_ksu_sid && susfs_priv_app_sid && tsid == susfs_ksu_sid)
+		tsid = susfs_priv_app_sid;
 #endif
 	avc_dump_query(ab, ad->selinux_audit_data->state,
 		       ad->selinux_audit_data->ssid,
-		       ad->selinux_audit_data->tsid,
+		       tsid,
 		       ad->selinux_audit_data->tclass);
 	if (ad->selinux_audit_data->denied) {
 		audit_log_format(ab, " permissive=%u",

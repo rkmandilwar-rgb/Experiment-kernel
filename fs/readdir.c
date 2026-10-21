@@ -28,6 +28,32 @@ extern bool susfs_is_inode_sus_path(struct inode *inode);
 extern int susfs_get_data_path(struct path *path);
 #endif
 
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+/*
+ * One directory entry: is its inode a registered sus path for the caller?
+ *
+ * The uid/umounted gate is checked first because it is what
+ * susfs_is_inode_sus_path() would reject on anyway -- but doing it here
+ * keeps the per-entry ilookup() (an inode hash walk plus a refcount pair)
+ * off the getdents path for every process that is not being hidden from.
+ */
+static inline bool susfs_readdir_hide(struct super_block *sb, u64 ino)
+{
+	struct inode *inode;
+	bool hide;
+
+	if (likely(!susfs_is_current_proc_umounted_app()))
+		return false;
+
+	inode = ilookup(sb, ino);
+	if (!inode)
+		return false;
+	hide = susfs_is_inode_sus_path(inode);
+	iput(inode);
+	return hide;
+}
+#endif
+
 int iterate_dir(struct file *file, struct dir_context *ctx)
 {
 	struct inode *inode = file_inode(file);
@@ -137,15 +163,8 @@ static int fillonedir(struct dir_context *ctx, const char *name, int namlen,
 	struct readdir_callback *buf =
 		container_of(ctx, struct readdir_callback, ctx);
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
-	{
-		struct inode *s_inode = ilookup(buf->sb, ino);
-		if (s_inode) {
-			bool hide = susfs_is_inode_sus_path(s_inode);
-			iput(s_inode);
-			if (hide)
-				return 0;
-		}
-	}
+	if (susfs_readdir_hide(buf->sb, ino))
+		return 0;
 #endif
 
 	struct old_linux_dirent __user * dirent;
@@ -245,15 +264,8 @@ static int filldir(struct dir_context *ctx, const char *name, int namlen,
 	struct getdents_callback *buf =
 		container_of(ctx, struct getdents_callback, ctx);
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
-	{
-		struct inode *s_inode = ilookup(buf->sb, ino);
-		if (s_inode) {
-			bool hide = susfs_is_inode_sus_path(s_inode);
-			iput(s_inode);
-			if (hide)
-				return 0;
-		}
-	}
+	if (susfs_readdir_hide(buf->sb, ino))
+		return 0;
 #endif
 
 	unsigned long d_ino;
@@ -364,15 +376,8 @@ static int filldir64(struct dir_context *ctx, const char *name, int namlen,
 	struct getdents_callback64 *buf =
 		container_of(ctx, struct getdents_callback64, ctx);
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
-	{
-		struct inode *s_inode = ilookup(buf->sb, ino);
-		if (s_inode) {
-			bool hide = susfs_is_inode_sus_path(s_inode);
-			iput(s_inode);
-			if (hide)
-				return 0;
-		}
-	}
+	if (susfs_readdir_hide(buf->sb, ino))
+		return 0;
 #endif
 
 	int reclen = ALIGN(offsetof(struct linux_dirent64, d_name) + namlen + 1,
@@ -486,15 +491,8 @@ static int compat_fillonedir(struct dir_context *ctx, const char *name,
 	struct compat_readdir_callback *buf =
 		container_of(ctx, struct compat_readdir_callback, ctx);
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
-	{
-		struct inode *s_inode = ilookup(buf->sb, ino);
-		if (s_inode) {
-			bool hide = susfs_is_inode_sus_path(s_inode);
-			iput(s_inode);
-			if (hide)
-				return 0;
-		}
-	}
+	if (susfs_readdir_hide(buf->sb, ino))
+		return 0;
 #endif
 
 	struct compat_old_linux_dirent __user *dirent;
@@ -588,15 +586,8 @@ static int compat_filldir(struct dir_context *ctx, const char *name, int namlen,
 	struct compat_getdents_callback *buf =
 		container_of(ctx, struct compat_getdents_callback, ctx);
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
-	{
-		struct inode *s_inode = ilookup(buf->sb, ino);
-		if (s_inode) {
-			bool hide = susfs_is_inode_sus_path(s_inode);
-			iput(s_inode);
-			if (hide)
-				return 0;
-		}
-	}
+	if (susfs_readdir_hide(buf->sb, ino))
+		return 0;
 #endif
 
 	compat_ulong_t d_ino;

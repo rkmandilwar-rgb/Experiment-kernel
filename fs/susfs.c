@@ -138,6 +138,25 @@ void susfs_add_sus_path_loop(void __user **user_info) {
 	strscpy(new_list->target_pathname, info.target_pathname, SUSFS_MAX_LEN_PATHNAME);
 	INIT_LIST_HEAD(&new_list->list);
 	mutex_lock(&susfs_mutex_lock_sus_path);
+	{
+		/*
+		 * The list is never pruned, so a repeated registration (the
+		 * daemon does re-add its paths after a re-exec) would grow it
+		 * without bound and make every re-flag walk longer.
+		 */
+		struct st_susfs_sus_path_list *cur;
+
+		list_for_each_entry(cur, &LH_SUS_PATH_LOOP, list) {
+			if (!strcmp(cur->target_pathname, new_list->target_pathname)) {
+				mutex_unlock(&susfs_mutex_lock_sus_path);
+				kfree(new_list);
+				SUSFS_LOGI("target_pathname: '%s' is already in LH_SUS_PATH_LOOP\n",
+						info.target_pathname);
+				info.err = 0;
+				goto out_copy_to_user;
+			}
+		}
+	}
 	list_add_tail_rcu(&new_list->list, &LH_SUS_PATH_LOOP);
 	mutex_unlock(&susfs_mutex_lock_sus_path);
 	SUSFS_LOGI("target_pathname: '%s', is successfully added to LH_SUS_PATH_LOOP\n", new_list->target_pathname);
@@ -799,6 +818,8 @@ static DEFINE_SEQLOCK(susfs_uname_seqlock);
 
 void susfs_set_uname(void __user **user_info) {
 	struct st_susfs_uname info = {0};
+	char log_release[__NEW_UTS_LEN + 1] = {0};
+	char log_version[__NEW_UTS_LEN + 1] = {0};
 
 	if (copy_from_user(&info, (struct st_susfs_uname __user*)*user_info, sizeof(info))) {
 		info.err = -EFAULT;
@@ -823,13 +844,20 @@ void susfs_set_uname(void __user **user_info) {
 	} else {
 		strscpy(my_uname.version, info.version, __NEW_UTS_LEN);
 	}
+	/*
+	 * Log from a snapshot: my_uname is only stable while the write side of
+	 * the seqlock is held, and a concurrent set would change it under the
+	 * %s.
+	 */
+	memcpy(log_release, my_uname.release, sizeof(log_release));
+	memcpy(log_version, my_uname.version, sizeof(log_version));
 	write_sequnlock(&susfs_uname_seqlock);
+
+	SUSFS_LOGI("set spoofed release: '%s', version: '%s'\n",
+				log_release, log_version);
 
 	if (!static_key_enabled(&susfs_is_uname_spoof_buffer_set))
 		static_branch_enable(&susfs_is_uname_spoof_buffer_set);
-
-	SUSFS_LOGI("set spoofed release: '%s', version: '%s'\n",
-				my_uname.release, my_uname.version);
 
 	info.err = 0;
 out_copy_to_user:
@@ -1236,6 +1264,15 @@ int susfs_open_redirect_spoof_vfs_readlink(struct inode *inode, char __user *buf
 				srcu_read_unlock(&susfs_srcu_open_redirect, srcu_idx);
 				return -EFAULT;
 			}
+			/*
+			 * There is room for a terminator (len < buflen), and the
+			 * count returned below does not include it, so callers that
+			 * treat the buffer as a C string still see a valid name.
+			 */
+			if (put_user('\0', buffer + len)) {
+				srcu_read_unlock(&susfs_srcu_open_redirect, srcu_idx);
+				return -EFAULT;
+			}
 			srcu_read_unlock(&susfs_srcu_open_redirect, srcu_idx);
 			/* vfs_readlink() returns the byte count, 0 would mean "empty" */
 			return len;
@@ -1628,6 +1665,14 @@ static int susfs_sdcard_monitor_fn(void *data)
 
 	if (!susfs_is_current_ksu_domain()) {
 		SUSFS_LOGE("domain is not ksu, exiting the thread\n");
+		/*
+		 * Nothing will ever observe the "not decrypted" transition now,
+		 * so drop the key the same way the watch failure below does:
+		 * otherwise every mount made later keeps a fake mnt_id and the
+		 * sdcard mount list is never cleaned up.
+		 */
+		if (static_key_enabled(&susfs_is_sdcard_android_data_not_decrypted))
+			static_branch_disable(&susfs_is_sdcard_android_data_not_decrypted);
 		return -EINVAL;
 	}
 

@@ -1876,8 +1876,15 @@ retry:
 					dput(dentry);
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
 					if (found_sus_path) {
-						dentry = d_alloc_parallel(dir, &susfs_fake_qstr_name, &wq);
-						goto retry;
+						/*
+						 * Already retried under the reserved fake
+						 * name and the fs still rejects it: report
+						 * the hidden path as missing instead of
+						 * looping between d_revalidate() and
+						 * d_alloc_parallel() forever.
+						 */
+						dentry = ERR_PTR(-ENOENT);
+						goto out;
 					}
 #endif
 					goto again;

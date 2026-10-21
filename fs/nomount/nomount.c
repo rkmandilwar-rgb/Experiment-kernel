@@ -1257,6 +1257,16 @@ static struct nomount_leaf *nm_alloc_leaf(const char *path, u16 len, u32 flags)
     leaf->v_ino = (unsigned long)leaf->v_hash;
     if (!kern_path(leaf->paths, LOOKUP_FOLLOW, &anchor)) {
         struct inode *inode = d_backing_inode(anchor.dentry);
+
+        /*
+         * A lookup may resolve to a negative dentry (an automount point or
+         * a racing unlink); treat it as "no anchor" instead of oopsing on
+         * the inode dereference below.
+         */
+        if (unlikely(!inode)) {
+            path_put(&anchor);
+            goto no_anchor;
+        }
         leaf->v_ino = inode->i_ino;
         d_drop(anchor.dentry);
         if (S_ISDIR(inode->i_mode) && inode->i_op != &nm_dir_iops) {
@@ -1273,6 +1283,7 @@ static struct nomount_leaf *nm_alloc_leaf(const char *path, u16 len, u32 flags)
             path_put(&anchor);
         }
     }
+no_anchor:
     if ((flags & NM_FLAG_IS_DIR) && !leaf->this_dir) {
         leaf->this_dir = __nomount_alloc_dir_node();
         if (!leaf->this_dir) {
@@ -1483,6 +1494,17 @@ static int __nomount_add_rule(const char *v_path, const char *r_path, u16 v_len,
     bool fresh, replace;
 
     char *r_buf = NULL;
+
+    /*
+     * NM_FLAG_VIRTUAL_DIR is bookkeeping for the synthetic directories this
+     * module creates while stitching a rule into the tree; it must never
+     * come from the payload, or a rule can claim a virtual backing and end
+     * up matching the prune logic that is only meant for our own nodes.
+     * IS_DIR is re-derived from the resolved path by nm_prepare_rule().
+     */
+    if (unlikely(flags & ~(NM_FLAG_IS_DIR | NM_FLAG_WHITEOUT)))
+        return -EINVAL;
+
     if (r_path && r_len) {
         if (!(r_buf = kmalloc(r_len + 1, GFP_KERNEL))) return -ENOMEM;
         memcpy(r_buf, r_path, r_len);

@@ -1340,7 +1340,14 @@ susfs_mnt_ready:
 			goto out_free;
 	}
 
-	mnt->mnt.mnt_flags = old->mnt.mnt_flags;
+	/*
+	 * Never inherit the susfs "id was not taken from the ida" tag: it
+	 * describes this mount's own mnt_id, and this mount has either a fresh
+	 * ida id or was tagged explicitly below.  Copying it from a ksu
+	 * unshared mount would make mnt_free_id() skip an id that *is*
+	 * registered, leaking an ida slot on every such clone.
+	 */
+	mnt->mnt.mnt_flags = old->mnt.mnt_flags & ~VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT;
 	mnt->mnt.mnt_flags &= ~(MNT_WRITE_HOLD|MNT_MARKED|MNT_INTERNAL);
 #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 	if (unlikely(is_mnt_ksu_unshared))

@@ -40,6 +40,15 @@ extern struct selinux_state selinux_state;
 
 static bool ksu_selinux_hide_enabled __read_mostly = true;
 
+/*
+ * Serialises every fops slot patch.  Without it two of the late init
+ * paths (the init kthread, second stage and post-fs-data all call the
+ * ksu_hook_* helpers) can both observe "not hooked yet", and the second
+ * one then caches the *patched* pointer as the original -- which turns
+ * the hook into infinite recursion or a call through NULL.
+ */
+static DEFINE_MUTEX(ksu_hook_mutex);
+
 struct ksu_hide_buf {
     size_t len;
     char   data[];
@@ -217,37 +226,45 @@ static bool ksu_is_dirty_access_query(const char *scon, const char *tcon)
     return false;
 }
 
-static void ksu_fix_access_response(void *private_data, bool deny)
+static void ksu_fix_access_response(void *private_data)
 {
-    struct simple_transaction_argresp *ar = private_data;
-    unsigned int allowed, ff, auditallow, auditdeny, flags, seqno;
-    char buf[64];
-    int len;
+	struct simple_transaction_argresp *ar = private_data;
+	unsigned int allowed, ff, auditallow, auditdeny, flags, seqno;
+	char buf[64];
+	int len;
 
-    if (!ar)
-        return;
+	if (!ar)
+		return;
 
-    if (sscanf(ar->data, "%x %x %x %x %u %x",
-               &allowed, &ff, &auditallow, &auditdeny, &seqno, &flags) != 6)
-        return;
+	if (sscanf(ar->data, "%x %x %x %x %u %x",
+		   &allowed, &ff, &auditallow, &auditdeny, &seqno, &flags) != 6)
+		return;
 
-    if (deny) {
-        allowed    = 0;
-        auditallow = 0;
-        auditdeny  = 0xffffffff;
-        flags      = 0;
-    }
+	/*
+	 * Report an unconditional denial with every audit bit set, i.e. the
+	 * answer a policy without this type would give.  seqno is pinned so a
+	 * caller cannot use it to notice the rewrite.
+	 */
+	allowed    = 0;
+	auditallow = 0;
+	auditdeny  = 0xffffffff;
+	flags      = 0;
+	seqno      = 1;
 
-    seqno = 1;
+	len = scnprintf(buf, sizeof(buf), "%x %x %x %x %u %x",
+			allowed, 0xffffffff, auditallow, auditdeny, seqno, flags);
 
-    len = scnprintf(buf, sizeof(buf), "%x %x %x %x %u %x",
-                    allowed, 0xffffffff, auditallow, auditdeny, seqno, flags);
-
-    if (len > 0 && len < (int)SIMPLE_TRANSACTION_LIMIT) {
-        memcpy(ar->data, buf, len);
-        ar->data[len] = '\0';
-        ar->size = len;
-    }
+	if (len > 0 && len < (int)SIMPLE_TRANSACTION_LIMIT) {
+		memcpy(ar->data, buf, len);
+		ar->data[len] = '\0';
+		/*
+		 * Publish the payload before the length, exactly like
+		 * simple_transaction_set() does; readers use ->size to decide
+		 * how much of ->data is valid.
+		 */
+		smp_mb();
+		ar->size = len;
+	}
 }
 
 static int ksu_patch_fops_slot(void **slot, void *new_fn)
@@ -332,7 +349,14 @@ static __nocfi ssize_t ksu_sel_write(struct file *file, const char __user *ubuf,
             ksu_is_dirty_access_query(scon, tcon))
             deny = true;
 
-        ksu_fix_access_response(file->private_data, deny);
+        /*
+         * Only rewrite a reply that must be hidden.  For an ordinary
+         * query the kernel's own answer (including its real seqno, which
+         * userspace uses to invalidate its cached decisions) is returned
+         * untouched -- there is nothing to disguise in it.
+         */
+        if (deny)
+            ksu_fix_access_response(file->private_data, true);
     }
 
     return ret;
@@ -378,18 +402,25 @@ static void ksu_hook_proc_attr_write(void)
     struct file_operations *fops;
     int ret;
 
+    mutex_lock(&ksu_hook_mutex);
     if (orig_proc_pid_attr_write)
-        return;
+        goto out;
 
     fops = ksu_resolve_fops("/proc/self/attr/current");
     if (!fops || !fops->write)
-        return;
+        goto out;
 
-    g_proc_attr_fops = fops;
     orig_proc_pid_attr_write = fops->write;
     ret = ksu_patch_fops_slot((void **)&fops->write, ksu_proc_pid_attr_write);
-    if (ret)
+    if (ret) {
         pr_warn("selinux_hide: proc_attr hook failed: %d\n", ret);
+        orig_proc_pid_attr_write = NULL;
+        goto out;
+    }
+    /* only publish the fops once the slot really points at our wrapper */
+    g_proc_attr_fops = fops;
+out:
+    mutex_unlock(&ksu_hook_mutex);
 }
 
 static void ksu_hook_transaction_write(void)
@@ -397,18 +428,24 @@ static void ksu_hook_transaction_write(void)
     struct file_operations *fops;
     int ret;
 
+    mutex_lock(&ksu_hook_mutex);
     if (orig_sel_write)
-        return;
+        goto out;
 
     fops = ksu_resolve_fops("/sys/fs/selinux/context");
     if (!fops || !fops->write)
-        return;
+        goto out;
 
-    g_sel_context_fops = fops;
     orig_sel_write = fops->write;
     ret = ksu_patch_fops_slot((void **)&fops->write, ksu_sel_write);
-    if (ret)
+    if (ret) {
         pr_warn("selinux_hide: patch write failed: %d\n", ret);
+        orig_sel_write = NULL;
+        goto out;
+    }
+    g_sel_context_fops = fops;
+out:
+    mutex_unlock(&ksu_hook_mutex);
 }
 
 static struct page *ksu_fake_status_page __read_mostly = NULL;
@@ -426,7 +463,7 @@ static struct page *ksu_get_real_status_page(void)
 
 static int ksu_prepare_fake_status_page(void)
 {
-    struct page *real, *fake;
+    struct page *real, *fake, *old;
     struct selinux_kernel_status *rs, *fs;
 
     if (READ_ONCE(ksu_fake_status_page))
@@ -453,7 +490,19 @@ static int ksu_prepare_fake_status_page(void)
     fs->policyload  = 0;
 #endif
 
-    smp_store_release(&ksu_fake_status_page, fake);
+    /*
+     * The init kthread, the second stage and post-fs-data can all land
+     * here; the loser of the race must drop its page instead of
+     * overwriting the published one (that would leak a page per caller
+     * and leave an open file pointing at a page nobody owns).  cmpxchg
+     * is also the release barrier the readers pair with.
+     */
+    old = cmpxchg(&ksu_fake_status_page, NULL, fake);
+    if (old) {
+        __free_page(fake);
+        return 0;
+    }
+
     pr_info_ratelimited("selinux_hide: fake status ready seq=%d\n", fs->sequence);
     return 0;
 }
@@ -475,18 +524,24 @@ static void ksu_hook_status_open(void)
     struct file_operations *fops;
     int ret;
 
+    mutex_lock(&ksu_hook_mutex);
     if (orig_status_open)
-        return;
+        goto out;
 
     fops = ksu_resolve_fops("/sys/fs/selinux/status");
     if (!fops || !fops->open)
-        return;
+        goto out;
 
-    g_status_fops = fops;
     orig_status_open = fops->open;
     ret = ksu_patch_fops_slot((void **)&fops->open, ksu_status_open);
-    if (ret)
+    if (ret) {
         pr_warn("selinux_hide: patch status open failed: %d\n", ret);
+        orig_status_open = NULL;
+        goto out;
+    }
+    g_status_fops = fops;
+out:
+    mutex_unlock(&ksu_hook_mutex);
 }
 
 static int selinux_hide_get(u64 *v)
@@ -577,12 +632,28 @@ void __exit ksu_selinux_hide_exit(void)
     ksu_rcu_replace(&ksu_hide_rule_list, NULL);
     mutex_unlock(&ksu_hide_list_mutex);
 
-    if (g_sel_context_fops && orig_sel_write)
+    /*
+     * Restore every slot this feature patched and forget the "hooked"
+     * state, so a second init cannot patch an already patched slot or
+     * restore a stale pointer.  The fake status page is intentionally
+     * not freed: a file opened while the hook was live may still carry
+     * it in ->private_data, and an in-tree build never runs this path.
+     */
+    mutex_lock(&ksu_hook_mutex);
+    if (g_sel_context_fops && orig_sel_write) {
         ksu_patch_fops_slot((void **)&g_sel_context_fops->write, orig_sel_write);
-    if (g_status_fops && orig_status_open)
+        orig_sel_write = NULL;
+        g_sel_context_fops = NULL;
+    }
+    if (g_status_fops && orig_status_open) {
         ksu_patch_fops_slot((void **)&g_status_fops->open, orig_status_open);
+        orig_status_open = NULL;
+        g_status_fops = NULL;
+    }
     if (g_proc_attr_fops && orig_proc_pid_attr_write) {
         ksu_patch_fops_slot((void **)&g_proc_attr_fops->write, orig_proc_pid_attr_write);
         orig_proc_pid_attr_write = NULL;
+        g_proc_attr_fops = NULL;
     }
+    mutex_unlock(&ksu_hook_mutex);
 }
