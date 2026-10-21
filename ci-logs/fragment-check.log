@@ -1,6 +1,6 @@
-Checking 17 fragment(s) against out/.config
+Checking 18 fragment(s) against out/.config
 
-NOT-SET   CONFIG_BPF_EVENTS=y  (from kernel/configs/miatoll/ebpf.config: effective value is 'ABSENT')
-NOT-SET   CONFIG_TRACEPOINTS=y  (from kernel/configs/miatoll/ebpf.config: effective value is 'ABSENT')
+OVERRID   CONFIG_EROFS_FS_PCPU_KTHREAD  (from kernel/configs/miatoll/erofs.config: fragment asks for 'not set', config has '=y')
+OVERRID   CONFIG_EROFS_FS_PCPU_KTHREAD_HIPRI  (from kernel/configs/miatoll/erofs.config: fragment asks for 'not set', config has '=y')
 
-checked 520 options, 0 missing symbol(s), 2 ineffective option(s)
+checked 522 options, 0 missing symbol(s), 2 ineffective option(s)
