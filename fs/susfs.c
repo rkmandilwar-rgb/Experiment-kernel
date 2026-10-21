@@ -22,6 +22,7 @@
 #include <linux/jump_label.h>
 #include <linux/security.h>
 #include <linux/susfs.h>
+#include <linux/utsname.h>
 #include "fuse/fuse_i.h"
 #include "mount.h"
 
@@ -820,6 +821,8 @@ void susfs_set_uname(void __user **user_info) {
 	struct st_susfs_uname info = {0};
 	char log_release[__NEW_UTS_LEN + 1] = {0};
 	char log_version[__NEW_UTS_LEN + 1] = {0};
+	char real_release[__NEW_UTS_LEN + 1] = {0};
+	char real_version[__NEW_UTS_LEN + 1] = {0};
 
 	if (copy_from_user(&info, (struct st_susfs_uname __user*)*user_info, sizeof(info))) {
 		info.err = -EFAULT;
@@ -833,14 +836,27 @@ void susfs_set_uname(void __user **user_info) {
 		goto out_copy_to_user;
 	}
 
+	/*
+	 * "default" means "whatever the real kernel reports".  Snapshot it
+	 * under uts_sem before taking our own seqlock: reading utsname()
+	 * inside the seqlock would race with a concurrent uname(2) writer and
+	 * would nest the seqlock under a sleeping lock for no reason.
+	 */
+	if (!strcmp(info.release, "default") || !strcmp(info.version, "default")) {
+		down_read(&uts_sem);
+		strscpy(real_release, utsname()->release, __NEW_UTS_LEN);
+		strscpy(real_version, utsname()->version, __NEW_UTS_LEN);
+		up_read(&uts_sem);
+	}
+
 	write_seqlock(&susfs_uname_seqlock);
 	if (!strcmp(info.release, "default")) {
-		strscpy(my_uname.release, utsname()->release, __NEW_UTS_LEN);
+		strscpy(my_uname.release, real_release, __NEW_UTS_LEN);
 	} else {
 		strscpy(my_uname.release, info.release, __NEW_UTS_LEN);
 	}
 	if (!strcmp(info.version, "default")) {
-		strscpy(my_uname.version, utsname()->version, __NEW_UTS_LEN);
+		strscpy(my_uname.version, real_version, __NEW_UTS_LEN);
 	} else {
 		strscpy(my_uname.version, info.version, __NEW_UTS_LEN);
 	}
@@ -1402,12 +1418,15 @@ out_copy_to_user:
 static int copy_config_to_buf(const char *config_string, char *buf_ptr, size_t *copied_size, size_t bufsize) {
 	size_t tmp_size = strlen(config_string);
 
-	*copied_size += tmp_size;
-	if (*copied_size >= bufsize) {
+	/* Validate the whole extent before touching either the buffer or
+	 * *copied_size: a partially applied append would leave the caller's
+	 * cursor past the end of the (kzalloc'ed) destination on error. */
+	if (tmp_size >= bufsize || *copied_size >= bufsize - tmp_size) {
 		SUSFS_LOGE("bufsize is not big enough to hold the string.\n");
 		return -EINVAL;
 	}
 	memcpy(buf_ptr, config_string, tmp_size);
+	*copied_size += tmp_size;
 	return 0;
 }
 

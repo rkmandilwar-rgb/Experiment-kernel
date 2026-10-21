@@ -43,11 +43,31 @@ static inline void ksu_handle_extra_susfs_work(void)
 }
 
 /*
+ * The SUSFS branch has to perform the same per-process set-up as the plain
+ * branch below: without the tracepoint flag (and the seccomp relaxation on
+ * 5.10+) a manager or an allowlisted app spawned by zygote would keep
+ * without a working supercall channel.
+ */
+static void ksu_prepare_traced_process(void)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
+    if (current->seccomp.mode == SECCOMP_MODE_FILTER && current->seccomp.filter)
+        ksu_seccomp_allow_cache(current->seccomp.filter, __NR_reboot);
+#else
+    disable_seccomp();
+#endif
+
+#ifdef KSU_KPROBES_HOOK
+    ksu_set_task_tracepoint_flag(current);
+#endif
+}
+
+/*
  * SUSFS-aware spawn policy (v2.3.0): zygote is the only uid-0 spawner we
  * care about. Apps that must not see su/mounts get marked no_su+umounted
  * and their mounts are torn down before returning to userspace.
  */
-static int susfs_handle_zygote_spawn(uid_t ruid)
+static int susfs_handle_zygote_spawn(uid_t old_uid, uid_t ruid)
 {
     if (is_isolated_process(ruid)) {
         susfs_set_current_proc_no_su();
@@ -57,7 +77,7 @@ static int susfs_handle_zygote_spawn(uid_t ruid)
 
     // manager app: give it the supercall fd and let seccomp through
     if (unlikely(is_uid_manager(ruid))) {
-        disable_seccomp();
+        ksu_prepare_traced_process();
         pr_info("install fd for manager: %d\n", ruid);
         ksu_install_fd();
         return 0;
@@ -70,16 +90,19 @@ static int susfs_handle_zygote_spawn(uid_t ruid)
     }
 
     if (ksu_is_allow_uid_for_current(ruid)) {
-        disable_seccomp();
+        ksu_prepare_traced_process();
         return 0;
     }
 
     // spawned app keeps its mounts but must never see su
+#ifdef KSU_KPROBES_HOOK
+    ksu_clear_task_tracepoint_flag_if_needed(current);
+#endif
     susfs_set_current_proc_no_su();
     return 0;
 
 do_umount:
-    ksu_handle_umount(current_uid().val, ruid);
+    ksu_handle_umount(old_uid, ruid);
     ksu_handle_extra_susfs_work();
     return 0;
 }
@@ -93,7 +116,7 @@ int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid)
         return 0;
 
     if (susfs_is_sid_equal(current_cred(), susfs_zygote_sid))
-        return susfs_handle_zygote_spawn(new_uid);
+        return susfs_handle_zygote_spawn(old_uid, new_uid);
 
     return 0;
 #else

@@ -111,9 +111,22 @@ static int seq_show(struct seq_file *m, void *v)
 		}
 	}
 #endif
-	seq_printf(m, "pos:\t%lli\nflags:\t0%o\nmnt_id:\t%i\n",
-		   (long long)file->f_pos, f_flags,
-		   real_mount(file->f_path.mnt)->mnt_id);
+	{
+		/*
+		 * Never print a synthetic mount id: a hidden mount carries
+		 * mnt_id >= DEFAULT_KSU_MNT_ID, and the d_path()/kern_path()
+		 * fallback above can legitimately fail (deleted or hidden
+		 * path).  Map it to the nearest real ancestor here as well.
+		 */
+		int mnt_id = real_mount(file->f_path.mnt)->mnt_id;
+
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+		if (likely(susfs_is_current_proc_umounted()))
+			mnt_id = susfs_get_non_sus_mnt_id_from_mnt(real_mount(file->f_path.mnt));
+#endif
+		seq_printf(m, "pos:\t%lli\nflags:\t0%o\nmnt_id:\t%i\n",
+			   (long long)file->f_pos, f_flags, mnt_id);
+	}
 #if defined(CONFIG_KSU_SUSFS_SUS_MOUNT) || defined(CONFIG_KSU_SUSFS_SUS_KSTAT)
 susfs_spoofed:
 #endif

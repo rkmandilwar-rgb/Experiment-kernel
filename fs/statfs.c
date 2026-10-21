@@ -102,10 +102,17 @@ static int susfs_statfs_by_dentry(struct dentry *dentry, struct vfsmount *mnt,
 	retval = security_sb_statfs(dentry);
 	if (retval)
 		return retval;
-	if (!susfs_sus_kstat_spoof_vfs_statfs(d_backing_inode(dentry), buf, is_fuse)) {
+	/*
+	 * 0 means "a sus_kstat entry matched and already filled *buf": return
+	 * the spoofed values instead of asking the underlying filesystem.  The
+	 * old test was inverted, so the spoofed kstatfs was discarded and an
+	 * uninitialised retval was returned.
+	 */
+	retval = susfs_sus_kstat_spoof_vfs_statfs(d_backing_inode(dentry), buf, is_fuse);
+	if (retval == 0) {
 		if (buf->f_frsize == 0)
 			buf->f_frsize = buf->f_bsize;
-		return retval;
+		return 0;
 	}
 	retval = dentry->d_sb->s_op->statfs(dentry, buf);
 	if (retval == 0) {

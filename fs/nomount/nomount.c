@@ -1581,7 +1581,11 @@ static int __nomount_add_rule(const char *v_path, const char *r_path, u16 v_len,
     if (fresh) {
         RCU_INIT_POINTER(leaf->rules, array);
         if ((err = nomount_generate_virtual_topology(leaf, uid))) {
-            mutex_unlock(&nomount_mutex);
+            /*
+             * nomount_mutex belongs to the caller (__nomount_add_rule runs
+             * with it held); unlocking here released it twice on every
+             * error return.
+             */
             for (int i = 0; i < array->count; i++)
                 if (array->rules[i].r_path.dentry) path_put(&array->rules[i].r_path);
             kfree(array);
@@ -1599,8 +1603,7 @@ static int __nomount_add_rule(const char *v_path, const char *r_path, u16 v_len,
 
 out_dir:  nm_dir_put(new_dir);
 out_leaf: if (fresh) nm_free_leaf(leaf);
-out_rule: mutex_unlock(&nomount_mutex);
-          if (new_rule.r_path.dentry) path_put(&new_rule.r_path);
+out_rule: if (new_rule.r_path.dentry) path_put(&new_rule.r_path);
           kfree(r_buf);
           return err;
 }

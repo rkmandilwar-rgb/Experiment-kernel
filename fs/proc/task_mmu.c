@@ -872,6 +872,20 @@ static int show_smap(struct seq_file *m, void *v, int is_pid)
 
 	smaps_walk.private = mss;
 
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+	/*
+	 * A SUS_MAP vma must not show up in smaps either.  Skipping only the
+	 * header (the old bare return inside show_map_vma()) left an orphan
+	 * "Size:/Rss:" block behind, which is both wrong and a giveaway.
+	 * rollup entries carry no address, so keep accounting them there.
+	 */
+	if (!rollup_mode && vma->vm_file &&
+	    SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file))) {
+		m_cache_vma(m, vma);
+		return SEQ_SKIP;
+	}
+#endif
+
 #ifdef CONFIG_SHMEM
 	/* In case of smaps_rollup, reset the value from previous vma */
 	mss->check_shmem_swap = false;

@@ -4338,7 +4338,10 @@ int __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
 
 	down_read(&mm->mmap_sem);
 #ifdef CONFIG_KSU_SUSFS_SUS_MAP
+	/* find_vma() may return the following vma when addr sits in a hole */
 	vma = find_vma(mm, addr);
+	if (vma && addr < vma->vm_start)
+		vma = NULL;
 #endif
 	/* ignore errors, just check how much was successfully transferred */
 	while (len) {
@@ -4348,7 +4351,8 @@ int __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
 
 #ifdef CONFIG_KSU_SUSFS_SUS_MAP
 		/* never let a debugger read memory of a SUS_MAP'd vma */
-		if (vma && vma->vm_file && SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))
+		if (vma && vma->vm_file &&
+		    SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))
 			break;
 #endif
 		ret = get_user_pages_remote(tsk, mm, addr, 1,
