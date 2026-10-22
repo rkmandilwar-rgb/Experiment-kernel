@@ -5647,7 +5647,15 @@ CONFIG_LSM="lockdown,yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,appar
 # CONFIG_INIT_STACK_NONE is not set
 # CONFIG_INIT_STACK_ALL_PATTERN is not set
 CONFIG_INIT_STACK_ALL_ZERO=y
-CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y
+# init_on_alloc: OFF, matching the Android 17 miatoll kernels that boot this
+# ROM.  With it on, every page the allocator hands out - and every kmalloc for
+# callers that do not pass __GFP_ZERO - is explicitly zeroed.  On a 4.14 phone
+# that is a large amount of memset during early boot, on the same pages the
+# allocator would otherwise hand out untouched.  The cost is measurable boot
+# time for a hardening property this ROM's own kernel does not have.
+#
+# Can be re-enabled at runtime with init_on_alloc=1 on the kernel cmdline.
+# CONFIG_INIT_ON_ALLOC_DEFAULT_ON is not set
 # CONFIG_INIT_ON_FREE_DEFAULT_ON is not set
 CONFIG_CRYPTO=y
 
