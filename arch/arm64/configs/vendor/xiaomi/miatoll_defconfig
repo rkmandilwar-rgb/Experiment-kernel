@@ -286,8 +286,8 @@ CONFIG_HAVE_GCC_PLUGINS=y
 CONFIG_HAVE_CC_STACKPROTECTOR=y
 CONFIG_CC_STACKPROTECTOR=y
 # CONFIG_CC_STACKPROTECTOR_NONE is not set
-# CONFIG_CC_STACKPROTECTOR_REGULAR is not set
-CONFIG_CC_STACKPROTECTOR_STRONG=y
+CONFIG_CC_STACKPROTECTOR_REGULAR=y
+# CONFIG_CC_STACKPROTECTOR_STRONG is not set
 # CONFIG_LTO is not set
 CONFIG_ARCH_SUPPORTS_LTO_CLANG=y
 CONFIG_ARCH_SUPPORTS_THINLTO=y
@@ -317,7 +317,21 @@ CONFIG_OLD_SIGSUSPEND3=y
 CONFIG_COMPAT_OLD_SIGACTION=y
 # CONFIG_CPU_NO_EFFICIENT_FFS is not set
 CONFIG_HAVE_ARCH_VMAP_STACK=y
-CONFIG_VMAP_STACK=y
+# Virtually mapped kernel stacks: OFF.
+#
+# Every miatoll kernel that actually boots Infinity X v4.1 disables this
+# (ArshadJamil's BlackHole 17, AbdoAhmedElbanaa 17, Kinesis 17) and this one
+# has always had it on.  With it on, every task stack is a vmalloc allocation
+# instead of being carved from the contiguous physical range, which costs an
+# allocation and a TLB flush per thread creation and makes the stack
+# non-physically-contiguous.
+#
+# Neither the reference trees nor this one document a crash tied to it, so
+# this is alignment with three kernels known to boot the target ROM rather
+# than a proven root cause.  The trade-off is real: without vmap'ed stacks a
+# kernel stack overflow corrupts neighbouring memory instead of faulting on a
+# guard page.  Scheduler/uClamp/SUSFS work is unaffected either way.
+# CONFIG_VMAP_STACK is not set
 # CONFIG_ARCH_OPTIONAL_KERNEL_RWX is not set
 # CONFIG_ARCH_OPTIONAL_KERNEL_RWX_DEFAULT is not set
 CONFIG_ARCH_HAS_STRICT_KERNEL_RWX=y
