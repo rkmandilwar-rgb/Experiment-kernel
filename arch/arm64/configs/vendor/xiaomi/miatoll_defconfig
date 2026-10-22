@@ -344,15 +344,19 @@ CONFIG_MODULE_UNLOAD=y
 # CONFIG_MODULE_FORCE_UNLOAD is not set
 CONFIG_MODVERSIONS=y
 # CONFIG_MODULE_SRCVERSION_ALL is not set
-CONFIG_MODULE_SIG=y
-CONFIG_MODULE_SIG_FORCE=y
-CONFIG_MODULE_SIG_ALL=y
-# CONFIG_MODULE_SIG_SHA1 is not set
-# CONFIG_MODULE_SIG_SHA224 is not set
-# CONFIG_MODULE_SIG_SHA256 is not set
-# CONFIG_MODULE_SIG_SHA384 is not set
-CONFIG_MODULE_SIG_SHA512=y
-CONFIG_MODULE_SIG_HASH="sha512"
+# Module signing is intentionally OFF.
+#
+# The vendor defconfig enables MODULE_SIG + MODULE_SIG_FORCE, which is correct
+# for a ROM built end to end against one key: the build signs every module with
+# certs/signing_key.pem and refuses anything else.  This kernel is not that
+# build. Our key is generated per build and no ROM or third-party module is
+# signed with it, so MODULE_SIG_FORCE=y makes the kernel refuse *every* module
+# that was not built here - the ROM's /vendor/lib/modules and any module a
+# userspace component (KernelSU metamodule backends included) tries to insmod.
+#
+# The Android 17 miatoll kernels that boot this ROM ship with no module signing
+# at all. Match them: keep MODVERSIONS, drop the signature requirement.
+# CONFIG_MODULE_SIG is not set
 # CONFIG_MODULE_COMPRESS is not set
 # CONFIG_TRIM_UNUSED_KSYMS is not set
 CONFIG_MODULES_TREE_LOOKUP=y
@@ -5808,7 +5812,6 @@ CONFIG_PKCS7_MESSAGE_PARSER=y
 #
 # Certificates for signature checking
 #
-CONFIG_MODULE_SIG_KEY="certs/signing_key.pem"
 CONFIG_SYSTEM_TRUSTED_KEYRING=y
 CONFIG_SYSTEM_TRUSTED_KEYS=""
 # CONFIG_SYSTEM_EXTRA_CERTIFICATE is not set

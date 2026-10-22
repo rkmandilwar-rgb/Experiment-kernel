@@ -340,6 +340,9 @@ out:
 }
 
 /*** i_op / s_op / f_op Hijacking Hooks ***/
+/* one-shot: a boot loop must not fill the log buffer with identical lines */
+static bool nm_foreign_owner_warned;
+
 static struct dentry *nomount_hijacked_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags)
 {
     const struct inode_operations *orig_iop = NULL;
@@ -367,6 +370,26 @@ static struct dentry *nomount_hijacked_lookup(struct inode *dir, struct dentry *
         if (likely(!IS_ERR(target)))
             nomount_hijack_dentry_ops(dir, target, false);
         return res;
+    }
+
+    /*
+     * Reached only when another inode_operations hijacker (a KernelSU
+     * metamodule backend, another VFS-injection module, ...) replaced
+     * inode->i_op after we installed our own and then chained into us.
+     * nm_get_nm_iop() identifies our records by the lookup pointer, so a
+     * foreign i_op means we cannot find this directory's record and cannot
+     * reach the filesystem's real ->lookup either.
+     *
+     * There is no safe value to return here: EOPNOTSUPP, ENOENT and a NULL
+     * dentry all make the VFS treat an existing file as missing, and because
+     * this runs for every lookup under a hijacked directory it turns into a
+     * boot that never gets past the logo. Say so once, loudly, so the dmesg
+     * of such a boot names the real problem instead of leaving it a mystery.
+     */
+    if (!READ_ONCE(nm_foreign_owner_warned)) {
+        WRITE_ONCE(nm_foreign_owner_warned, true);
+        nm_warn("lookup of '%.*s' under ino %lu: inode ops owned by another hijacker, cannot fall back\n",
+                (int)dentry->d_name.len, dentry->d_name.name, (unsigned long)dir->i_ino);
     }
     return ERR_PTR(-EOPNOTSUPP);
 }
