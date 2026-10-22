@@ -909,6 +909,8 @@ asmlinkage long sys_open_by_handle_at(int mountdirfd,
 				      int flags);
 asmlinkage long sys_setns(int fd, int nstype);
 asmlinkage long sys_pidfd_open(pid_t pid, unsigned int flags);
+struct clone_args;
+asmlinkage long sys_clone3(struct clone_args __user *uargs, size_t size);
 asmlinkage long sys_process_vm_readv(pid_t pid,
 				     const struct iovec __user *lvec,
 				     unsigned long liovcnt,
