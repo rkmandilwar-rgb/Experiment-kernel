@@ -1572,11 +1572,11 @@ static void pidfd_show_fdinfo(struct seq_file *m, struct file *f)
 /*
  * Poll support for process exit notification.
  */
-static unsigned int pidfd_poll(struct file *file, struct poll_table_struct *pts)
+static __poll_t pidfd_poll(struct file *file, struct poll_table_struct *pts)
 {
 	struct task_struct *task;
 	struct pid *pid = file->private_data;
-	int poll_flags = 0;
+	__poll_t poll_flags = 0;
 
 	poll_wait(file, &pid->wait_pidfd, pts);
 
@@ -1588,7 +1588,7 @@ static unsigned int pidfd_poll(struct file *file, struct poll_table_struct *pts)
 	 * group, then poll(2) should block, similar to the wait(2) family.
 	 */
 	if (!task || (task->exit_state && thread_group_empty(task)))
-		poll_flags = POLLIN | POLLRDNORM;
+		poll_flags = EPOLLIN | EPOLLRDNORM;
 	rcu_read_unlock();
 
 	return poll_flags;
@@ -1678,6 +1678,7 @@ static void copy_oom_score_adj(u64 clone_flags, struct task_struct *tsk)
 	tsk->signal->oom_score_adj = current->signal->oom_score_adj;
 	tsk->signal->oom_score_adj_min = current->signal->oom_score_adj_min;
 	mutex_unlock(&oom_adj_mutex);
+	u64 clone_flags = args->flags;
 }
 
 /*
@@ -1754,8 +1755,7 @@ static __latent_entropy struct task_struct *copy_process(
 		 *   reuse it later for CLONE_PIDFD.
 		 * - CLONE_THREAD is blocked until someone really needs it.
 		 */
-		if (clone_flags &
-		    (CLONE_DETACHED | CLONE_PARENT_SETTID | CLONE_THREAD))
+		if (clone_flags & (CLONE_DETACHED | CLONE_THREAD))
 			return ERR_PTR(-EINVAL);
 
 		/*
@@ -1968,7 +1968,7 @@ static __latent_entropy struct task_struct *copy_process(
 			goto bad_fork_free_pid;
 
 		pidfd = retval;
-		retval = put_user(pidfd, parent_tidptr);
+		retval = put_user(pidfd, args->pidfd);
 		if (retval)
 			goto bad_fork_put_pidfd;
 	}
@@ -2263,23 +2263,26 @@ long _do_fork(unsigned long clone_flags,
 	p = copy_process(clone_flags, stack_start, stack_size, parent_tidptr,
 			 child_tidptr, NULL, trace, tls, NUMA_NO_NODE);
 	add_latent_entropy();
+
+	if (IS_ERR(p))
+		return PTR_ERR(p);
+
 	/*
 	 * Do this prior waking up the new thread - the thread pointer
 	 * might get invalid after that point, if the thread exits quickly.
 	 */
-	if (!IS_ERR(p)) {
-		struct completion vfork;
-		struct pid *pid;
+	trace_sched_process_fork(current, p);
 
-		cpufreq_task_times_alloc(p);
+	cpufreq_task_times_alloc(p);
 
-		trace_sched_process_fork(current, p);
+	pid = get_task_pid(p, PIDTYPE_PID);
+	nr = pid_vnr(pid);
 
-		pid = get_task_pid(p, PIDTYPE_PID);
-		nr = pid_vnr(pid);
+	if (clone_flags & CLONE_PARENT_SETTID)
+		put_user(nr, parent_tidptr);
 
 		if (clone_flags & CLONE_PARENT_SETTID)
-			put_user(nr, parent_tidptr);
+			put_user(nr, args->parent_tid);
 
 		if (clone_flags & CLONE_VFORK) {
 			p->vfork_done = &vfork;
@@ -2302,6 +2305,19 @@ long _do_fork(unsigned long clone_flags,
 	} else {
 		nr = PTR_ERR(p);
 	}
+
+	wake_up_new_task(p);
+
+	/* forking complete and child started to run, tell ptracer */
+	if (unlikely(trace))
+		ptrace_event_pid(trace, pid);
+
+	if (clone_flags & CLONE_VFORK) {
+		if (!wait_for_vfork_done(p, &vfork))
+			ptrace_event_pid(PTRACE_EVENT_VFORK_DONE, pid);
+	}
+
+	put_pid(pid);
 	return nr;
 }
 
@@ -2376,6 +2392,49 @@ SYSCALL_DEFINE5(clone, unsigned long, clone_flags, unsigned long, newsp,
 }
 #endif
 
+/*
+ * clone3(2): the struct-based clone, needed by Android 17 userspace
+ * (bionic probes it before falling back to clone). Adapted from the
+ * upstream implementation to this kernel's _do_fork() interface:
+ * exit_signal travels in the CSIGNAL bits, and the pidfd and
+ * clear-sighand extensions this kernel lacks are rejected with -EINVAL
+ * so callers fall back to clone(2).
+ */
+SYSCALL_DEFINE2(clone3, struct clone_args __user *, uargs, size_t, size)
+{
+	int err;
+	struct clone_args args;
+	unsigned long clone_flags;
+	int __user *parent_tidptr;
+	int __user *child_tidptr;
+	unsigned long tls;
+
+	err = copy_struct_from_user(&args, sizeof(args), uargs, size);
+	if (err)
+		return err;
+
+	if (args.flags & (CLONE_PIDFD | CLONE_CLEAR_SIGHAND | CLONE_DETACHED))
+		return -EINVAL;
+
+	if (args.exit_signal > SIGRTMAX)
+		return -EINVAL;
+
+	if (args.stack_size) {
+		if ((args.flags & CLONE_VM) || !args.stack)
+			return -EINVAL;
+	}
+
+	clone_flags = (args.flags & ~CSIGNAL) | (args.exit_signal & CSIGNAL);
+
+	parent_tidptr = (int __user *)args.parent_tid;
+	child_tidptr = (int __user *)args.child_tid;
+	tls = (unsigned long)args.tls;
+
+	return _do_fork(clone_flags, (unsigned long)args.stack,
+			(unsigned long)args.stack_size, parent_tidptr,
+			child_tidptr, tls);
+}
+
 void walk_process_tree(struct task_struct *top, proc_visitor visitor, void *data)
 {
 	struct task_struct *leader, *parent, *child;
@@ -2407,10 +2466,13 @@ up:
 out:
 	read_unlock(&tasklist_lock);
 }
+#endif
 
+#ifdef __ARCH_WANT_SYS_CLONE3
 #ifndef ARCH_MIN_MMSTRUCT_ALIGN
 #define ARCH_MIN_MMSTRUCT_ALIGN 0
 #endif
+	pid_t *kset_tid = kargs->set_tid;
 
 static void sighand_ctor(void *data)
 {
@@ -2472,6 +2534,10 @@ static int check_unshare_flags(unsigned long unshare_flags)
 	 */
 	if (unshare_flags & (CLONE_THREAD | CLONE_SIGHAND | CLONE_VM)) {
 		if (!thread_group_empty(current))
+	if ((kargs->flags & (CLONE_SIGHAND | CLONE_CLEAR_SIGHAND)) ==
+	    (CLONE_SIGHAND | CLONE_CLEAR_SIGHAND))
+		return false;
+
 			return -EINVAL;
 	}
 	if (unshare_flags & (CLONE_SIGHAND | CLONE_VM)) {
@@ -2482,6 +2548,9 @@ static int check_unshare_flags(unsigned long unshare_flags)
 		if (!current_is_single_threaded())
 			return -EINVAL;
 	}
+
+	if (!clone3_stack_valid(kargs))
+		return false;
 
 	return 0;
 }

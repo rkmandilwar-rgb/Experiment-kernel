@@ -26,6 +26,9 @@ extern union thread_union init_thread_union;
 extern struct task_struct init_task;
 
 #ifdef CONFIG_PROVE_RCU
+	pid_t *set_tid;
+	/* Number of elements in *set_tid */
+	size_t set_tid_size;
 extern int lockdep_tasklist_lock_is_held(void);
 #endif /* #ifdef CONFIG_PROVE_RCU */
 
