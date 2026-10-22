@@ -3,8 +3,9 @@
 This directory vendors the kernel component from:
 
 - Repository: https://github.com/backslashxx/KernelSU
-- Release/tag: `v3.3.1-21` (kernel driver `KSU_VERSION=32700`, **UAPI v6**)
-- Matching Manager release asset: `KernelSU_v3.3.1-21_32701-release.apk`
+- Release/tag: `v3.3.1-22` (kernel driver constant `KSU_VERSION=32700`, **UAPI v6**)
+- Matching Manager release asset: `KernelSU_v3.3.1-22_32702-release.apk`
+  (Manager version code 32702 pairs with the unchanged 32700 driver constant)
 - The upstream `kernel/` subtree is imported, with only the local SUSFS v2.3.0
   glue documented below reapplied.
 - The driver exposes KernelSU UAPI v6, which the matching Manager requires
@@ -47,11 +48,47 @@ are retained across the `v3.3.1` refresh:
   caller dispatches the `CMD_SUSFS_*` (0x555xx/0x600xx) v2.3.0 userspace ABI.
   This is the channel the `ksu_susfs` tool (and therefore BRENE) uses on this
   fork, since the fork has no `prctl(KERNEL_SU_OPTION)` hook.
-- `supercall/dispatch.c` — atomic `EVENT_POST_FS_DATA` one-shot guard,
-  `susfs_start_sdcard_monitor_fn()` on that one-shot, and
-  `ksu_module_mounted = true` on `EVENT_MODULE_MOUNTED`.
+- `supercall/dispatch.c` — atomic `EVENT_POST_FS_DATA` one-shot guard and
+  `susfs_start_sdcard_monitor_fn()` on that one-shot. `ksu_module_mounted`
+  is no longer set here: upstream `runtime/boot_event.c`
+  (`on_module_mounted()`) owns it as of v3.3.1-22.
 
 ## Sync history
+
+- 2026-10-22: refreshed the vendored driver to backslashxx/KernelSU
+  `v3.3.1-22` (driver constant still `KSU_VERSION=32700`, UAPI v6; Manager
+  `KernelSU_v3.3.1-22_32702-release.apk`) and reapplied the local SUSFS glue.
+  The `kernel/` subtree is a straight import of upstream `v3.3.1-22`; only the
+  six glue files below differ from it. What moved upstream and changed our
+  local setup:
+  - **Legacy / non-GKI kernel support.** New `hook/lsm_hooks_ultralegacy.c`,
+    `kernel: prepare for legacy support`, `compat: squash ALL compat shims`,
+    `lsm_hook: bprm: escape init ksud call to root for < 4.14`,
+    `adapt "namespace support" feature to old kernels`,
+    `feature: umount: wire up path_umount compat`. This is the series that
+    matters for 4.14 trees like ours.
+  - **Mount-namespace + module rc injection fixes.** `su_mount_ns: move
+    ksys_unshare to ksyscall`, `ksud: read: add fallback to /init.rc`,
+    `handle newfstat init_rc size injection`, `handle early newfstat
+    module_rc size injection`, `migrate ksu_install_rc_hook to
+    security_file_permission LSM`, `Fix init.rc detection for bind-mounted
+    files`, `Add module preinit`, `ksud: preinit: extract a bit more
+    /metamodule space`. These are the paths a metamodule exercises during
+    post-fs-data, i.e. the suspected cause of the boot-logo hangs reported
+    on Android 17 (Infinity X 4.x) with v3.3.1-21.
+  - **Local quirks dropped, now upstream:** preinit is disabled upstream via
+    `KSU_NO_PREINIT` in `preinit/preinit.h` whenever jump labels are
+    unavailable (our arm64 4.14 build), so the local `-DKSU_NO_PREINIT`
+    Makefile flag is gone; `ksu_module_mounted` is set by
+    `runtime/boot_event.c`; `MODULE_RC_MAX` clamping now covers the read
+    path upstream.
+  - **Local build fixes re-checked.** The fortify/`assume()`/`4.14 syscall
+    wrapper` fixes from the -21 refresh are no longer needed as local
+    patches: upstream -22 carries its own `assume()` compat, absolute
+    `ksyscall` wrappers and the `#else`-free `ksys_unshare` shim.
+  Note: upstream deleted the `v3.3.1-21` release and its assets (the tag
+  `v3.3.1+21` remains, pointing at newer content), so release jobs must pin
+  `v3.3.1-22` and fall back to a mirrored Manager asset.
 
 - 2026-10-21: refreshed the vendored driver to backslashxx/KernelSU
   `v3.3.1-21` (`KSU_VERSION=32700`, UAPI v6) and reapplied the local SUSFS

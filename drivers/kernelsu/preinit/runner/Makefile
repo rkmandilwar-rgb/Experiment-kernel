@@ -6,7 +6,7 @@ DUMP = runner_xxd.h
 ZIG_VER := $(shell zig version)
 
 CFLAGS += -target aarch64-linux -std=gnu23
-CFLAGS += -Oz -flto -s
+CFLAGS += -Oz -flto -s -static
 CFLAGS += -fno-unwind-tables -fmerge-all-constants
 CFLAGS += -Wl,--entry=__start
 CFLAGS += -s -Wl,--gc-sections,-z,norelro
@@ -22,6 +22,7 @@ $(TARGET): $(SRC)
 
 $(DUMP): $(TARGET)
 	xxd -i $(TARGET) > $@
+	tail -n1 $@
 	rm -f $(TARGET)
 
 clean:

@@ -32,7 +32,7 @@ grep -q "#include <linux/susfs.h>" drivers/kernelsu/ksu.c && ok "ksu.c includes 
 grep -q "susfs_init()" drivers/kernelsu/ksu.c && ok "ksu.c calls susfs_init()" || fail "ksu.c does not call susfs_init()"
 grep -q "SUSFS_MAGIC" drivers/kernelsu/supercall/supercall.c && ok "supercall SUSFS magic dispatch" || fail "supercall SUSFS dispatch missing"
 grep -q "susfs_start_sdcard_monitor_fn" drivers/kernelsu/supercall/dispatch.c && ok "dispatch boot-complete monitor" || fail "dispatch boot-complete monitor missing"
-grep -q "ksu_module_mounted" drivers/kernelsu/supercall/dispatch.c && ok "dispatch module-mounted mark" || fail "dispatch module-mounted mark missing"
+grep -q "ksu_module_mounted = true" drivers/kernelsu/runtime/boot_event.c && ok "module-mounted mark (boot_event)" || fail "module-mounted mark missing from runtime/boot_event.c"
 grep -q "EVENT_POST_FS_DATA" drivers/kernelsu/supercall/dispatch.c && ok "dispatch boot-complete one-shot" || fail "dispatch boot-complete one-shot missing"
 grep -q "susfs_is_current_ksu_domain" drivers/kernelsu/selinux/selinux.c && ok "selinux ksu-domain check" || fail "selinux ksu-domain check missing"
 grep -q "susfs_extra_works" drivers/kernelsu/hook/setuid_hook.c && ok "setuid umount glue" || fail "setuid umount glue missing"

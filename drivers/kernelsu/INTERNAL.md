@@ -1,6 +1,5 @@
 # Quirks / Adaptations
 ## NOT IMPLEMENTED
-- preinit, #3397 (kept off with `-DKSU_NO_PREINIT` in the Makefile)
 - late-load, #3258
 
 ## differences

@@ -196,12 +196,21 @@ static noinline ssize_t ksu_kernel_write_compat(struct file *file, const void *b
 #define TWA_RESUME 1
 #endif
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 4, 0)
+// https://elixir.bootlin.com/linux/v3.4/source/include/linux/kconfig.h
+#define __ARG_PLACEHOLDER_1 0,
+#define config_enabled(cfg) _config_enabled(cfg)
+#define _config_enabled(value) __config_enabled(__ARG_PLACEHOLDER_##value)
+#define __config_enabled(arg1_or_junk) ___config_enabled(arg1_or_junk 1, 0)
+#define ___config_enabled(__ignored, val, ...) val
+#define IS_ENABLED(option) config_enabled(option)
+#endif
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 6, 0)
 static __nocfi struct file *ksu_dentry_open(const struct path *path, int flags, const struct cred *cred)
 {
 	// new type: struct file * dentry_open(const struct path *, int, const struct cred *);
 	extern typeof(dentry_open) dentry_open;
-	assume((void *)&dentry_open != nullptr);
 	if (!__builtin_types_compatible_p(typeof(dentry_open), typeof(ksu_dentry_open)))
 		goto old_fn;
 
@@ -512,7 +521,6 @@ static __nocfi struct user_struct *ksu_alloc_uid(uid_t uid)
 	// old: struct user_struct *alloc_uid(struct user_namespace *ns, uid_t uid)
 	// new: struct user_struct *alloc_uid(kuid_t uid)
 	extern typeof(alloc_uid) alloc_uid;
-	assume((void *)&alloc_uid != nullptr);
 	if (!__builtin_types_compatible_p(typeof(alloc_uid), struct user_struct *(struct user_namespace *, uid_t)))
 		goto new_fn;
 

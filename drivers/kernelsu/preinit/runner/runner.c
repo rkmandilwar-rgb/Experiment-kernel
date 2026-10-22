@@ -12,7 +12,6 @@
  * that can fail runs in the worker, so a crash there only costs the preinit
  * actions, never the boot.
  */
-
 #include "runner_oot.h"
 
 /* Overridable for host testing. */

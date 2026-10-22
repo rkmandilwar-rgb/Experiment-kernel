@@ -4,7 +4,7 @@
 # (LLVM_IAS=1, ld.lld) — the Kinesis/Saamrox toolchain setup.
 #
 # Root/hiding stack baked in:
-#   - KernelSU (backslashxx fork) v3.3.1-21 — drivers/kernelsu, manual hooks
+#   - KernelSU (backslashxx fork) v3.3.1-22 — drivers/kernelsu, manual hooks
 #     (issue #5 rev v2.3) + LSM security hooks
 #   - SUSFS v2.3.0 — non-GKI 4.14 semantic port (fs/susfs.c + fs hooks),
 #     userspace ABI bridged over the KernelSU reboot supercall
@@ -297,7 +297,7 @@ jobs:
           require 'CONFIG_BT_HCIBTUSB_RTL=y'
           require 'CONFIG_CFG80211_INTERNAL_REGDB=y'
 
-          # KernelSU (backslashxx v3.3.1-21)
+          # KernelSU (backslashxx v3.3.1-22)
           require 'CONFIG_KSU=y'
           require 'CONFIG_KSU_LSM_SECURITY_HOOKS=y'
           require 'CONFIG_KSU_HEURISTIC_IN_TREE_BUILD=y'
@@ -453,7 +453,7 @@ jobs:
           grep -q 'SUSFS_VERSION "v2.3.0"' include/linux/susfs.h \
             || { echo "::error::SUSFS is not v2.3.0"; exit 1; }
           grep -q 'KSU_VERSION=32700' drivers/kernelsu/Makefile \
-            || { echo "::error::KernelSU is not v3.3.1-21 (32700)"; exit 1; }
+            || { echo "::error::KernelSU is not v3.3.1-22 (driver 32700)"; exit 1; }
           grep -q '#define KERNEL_SU_UAPI_VERSION 6' drivers/kernelsu/include/uapi/supercall.h \
             || { echo "::error::KernelSU UAPI v6 is required"; exit 1; }
           grep -q 'NOMOUNT_BASE_VERSION "21"' fs/nomount/nomount.h \
@@ -661,20 +661,29 @@ jobs:
           kernel_zip=$(basename "${kernel_zips[0]}")
           cp "${kernel_zips[0]}" "release-payload/${kernel_zip}"
 
-          # Match the in-kernel KernelSU v3.3.1-21 driver (version 32700).
-          # backslashxx/KernelSU has removed the v3.3.1-21 release and its
-          # assets, so fall back to the APK mirrored on our stormbreaker-182
-          # release (same signed asset uploaded during build 182).
-          manager_apk='KernelSU_v3.3.1-21_32701-release.apk'
-          if ! gh release download 'v3.3.1-21' \
+          # Manager paired with the in-kernel KernelSU v3.3.1-22 driver
+          # (driver constant 32700, UAPI v6, Manager 32702).
+          # Upstream deletes old releases, so fall back to a copy mirrored on
+          # any of our own releases rather than pinning one tag.
+          manager_apk='KernelSU_v3.3.1-22_32702-release.apk'
+          if ! gh release download 'v3.3.1-22' \
                --repo backslashxx/KernelSU \
                --pattern "$manager_apk" \
                --dir release-payload; then
             rm -f "release-payload/${manager_apk}"
-            gh release download 'stormbreaker-182' \
-              --repo "$GITHUB_REPOSITORY" \
-              --pattern "$manager_apk" \
-              --dir release-payload
+            echo "upstream asset unavailable, looking for a mirrored copy"
+            for tag in $(gh release list --repo "$GITHUB_REPOSITORY" --limit 30 \
+                           --json tagName --jq '.[].tagName'); do
+              if gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+                   --json assets --jq '.assets[].name' | grep -qx "$manager_apk"; then
+                gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+                  --pattern "$manager_apk" --dir release-payload && break
+              fi
+            done
+          fi
+          if [ ! -f "release-payload/${manager_apk}" ]; then
+            echo "::error::KernelSU Manager APK ${manager_apk} could not be staged"
+            exit 1
           fi
 
           python3 - <<'PY'
@@ -686,7 +695,7 @@ jobs:
               raise SystemExit(f"Expected only two release assets, found: {[p.name for p in assets]}")
           if not any(p.name.startswith("Stormbreaker-miatoll-") and p.name.endswith(".zip") for p in assets):
               raise SystemExit("Flashable Stormbreaker kernel ZIP is missing")
-          if not any(p.name == "KernelSU_v3.3.1-21_32701-release.apk" for p in assets):
+          if not any(p.name == "KernelSU_v3.3.1-22_32702-release.apk" for p in assets):
               raise SystemExit("Matching KernelSU Manager APK is missing")
           for asset in assets:
               if not is_zipfile(asset):
@@ -715,7 +724,7 @@ jobs:
           cat > release-notes.md << EOF
           # Stormbreaker Kernel — Xiaomi Miatoll (build ${GITHUB_RUN_NUMBER})
 
-          Kernel: 4.14.357-openela · KernelSU driver: backslashxx v3.3.1-21 (32700; UAPI v6)
+          Kernel: 4.14.357-openela · KernelSU driver: backslashxx v3.3.1-22 (driver 32700, Manager 32702; UAPI v6)
           Device variants: Curtana / Gram / Joyeuse / Excalibur
 
           ## What's new
@@ -726,7 +735,7 @@ jobs:
               - 100 ms victim-reap timeout, vmpressure trigger at >= 98
           - Bluetooth: QCA UART transport for the internal WCN3990, Broadcom/Realtek USB support, HIDP + BNEP
           - Wi-Fi: vendor regulatory database built in (no CRDA daemon needed)
-          - KernelSU: driver + Manager updated to v3.3.1-21 (UAPI v6) — many bug fixes
+          - KernelSU: refreshed to v3.3.1-22 (driver 32700, Manager 32702, UAPI v6) — legacy/non-GKI kernel support, mount-namespace and module rc injection fixes; metamodules (mountify, hybrid mount, meta-overlayfs) mount again on Android 17 ROMs
           - SUSFS: /proc/kallsyms now hides the full KernelSU/SUSFS symbol set (was only 3 prefixes)
           - SUSFS: AVC log spoofing rewrites only KernelSU denials instead of dropping every SELinux denial
           - SUSFS: umount marking is profile-aware — only apps that were really umounted get the hidden view
@@ -739,7 +748,7 @@ jobs:
 
           Memory: conservative profile — Android ZRAM (LZ4 + dedup) with Simple LMK (PSI and MEMCG intentionally off, as the driver requires), zram-first reclaim (vm.swappiness 100), one swap page per fault, 256 KB read-ahead. KSM, THP, zswap/frontswap and HugeTLB are disabled.
 
-          KernelSU v3.3.1-21 uses UAPI v6 and must be paired with the included Manager (KernelSU_v3.3.1-21_32701). Upstream warns that existing KernelSU profiles may reset during this update; export important settings first.
+          KernelSU v3.3.1-22 uses UAPI v6 (driver 32700) and must be paired with the included Manager (KernelSU_v3.3.1-22_32702). Upstream warns that existing KernelSU profiles may reset during this update; export important settings first.
 
           TCP congestion control defaults to BBRplus, with classic BBR still available. FQ is enabled as the default qdisc for pacing.
 

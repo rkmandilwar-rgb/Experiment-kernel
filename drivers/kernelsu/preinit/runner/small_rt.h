@@ -1,5 +1,4 @@
 #pragma once
-
 #include <sys/syscall.h>
 
 // hint: -Wl,--entry=__start
@@ -94,19 +93,26 @@ static long __syscall_raw(long n, long a, long b, long c, long d, long e, long f
 }
 #endif
 
-int __snall_rt_errno;
-
+#ifdef small_rt_use_errno
+int __small_rt_errno;
 __attribute__((noinline))
 static long __syscall_gate(long n, long a, long b, long c, long d, long e, long f)
 {
 	long ret = __syscall_raw(n, a, b, c, d, e, f);
 	if (ret < 0 && ret >= -4095) {
-		__snall_rt_errno = (int)(-ret);
+		__small_rt_errno = (int)(-ret);
 		return -1;
 	}
 	return ret;
 }
-#define errno __snall_rt_errno
+#define errno __small_rt_errno
+#else
+__attribute__((noinline))
+static long __syscall_gate(long n, long a, long b, long c, long d, long e, long f)
+{
+	return __syscall_raw(n, a, b, c, d, e, f);
+}
+#endif
 
 #define __syscall_0(name) 			__syscall_gate(name, 0, 0, 0, 0, 0, 0)
 #define __syscall_1(name, a) 			__syscall_gate(name, a, 0, 0, 0, 0, 0)
@@ -121,7 +127,7 @@ static long __syscall_gate(long n, long a, long b, long c, long d, long e, long 
 #define __syscall_concat(a, b) a##b
 #define __syscall_exp(func, arg) __syscall_concat(func, arg)
 
-// usage: syscall(SYS_getuid), syscall(SYS_newuname, &buf)
+// usage: __syscall(SYS_getuid), __syscall(SYS_newuname, &buf)
 #define __syscall(...) __syscall_exp(__syscall_, __syscall_count_args(__VA_ARGS__))(__VA_ARGS__)
 
 extern int main(int argc, char **argv, char **envp);

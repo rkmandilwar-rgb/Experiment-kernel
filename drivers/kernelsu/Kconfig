@@ -143,7 +143,6 @@ config KSU_HEURISTIC_IN_TREE_BUILD
 	help
 	  Note: if youre building out-of-tree, configure by editing ksu.c #defines instead.
 
-
 menu "KernelSU - SUSFS"
 	depends on KSU
 
