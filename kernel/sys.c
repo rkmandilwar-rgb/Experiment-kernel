@@ -1516,7 +1516,7 @@ int do_prlimit(struct task_struct *tsk, unsigned int resource,
 
 	if (new_rlim) {
 		if (new_rlim->rlim_cur > new_rlim->rlim_max)
-			return -EPERM;
+			return -EINVAL;
 		if (resource == RLIMIT_NOFILE &&
 				new_rlim->rlim_max > sysctl_nr_open)
 			return -EPERM;
